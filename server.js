@@ -1331,7 +1331,10 @@ app.get('/download-file/:filename', (req, res) => {
 
 app.post("/sendProjectGroupMessage", upload.single("attachment"), async (req, res) => {
   try {
-    const { senderId, groupId, message, replyTo } = req.body;
+    const { senderId, projectId, message, replyTo } = req.body;
+    if (!senderId || !projectId) {
+      return res.status(400).json({ message: "senderId and projectId are required!" });
+    }
     let attachmentData = { filename: "", attachmentSetPath: "uploads/temp" };
     if (req.file) {
       attachmentData.filename = req.file.filename;
@@ -1339,7 +1342,7 @@ app.post("/sendProjectGroupMessage", upload.single("attachment"), async (req, re
     const msg = new ProjectGroupMessage({
       senderId,
       projectId,
-      message,
+      message: message || "",
       attachments: attachmentData,
       replyTo: replyTo || null
     });
@@ -1355,9 +1358,10 @@ app.post("/sendProjectGroupMessage", upload.single("attachment"), async (req, re
       });
     res.json(populated);
   } catch (err) {
-    console.error("Project Group send error:", err);
+    console.error("❌ Project Group send error:", err);
     res.status(500).json({
-      message: "Project group message send failed"
+      message: "Project group message send failed",
+      error: err.message
     });
   }
 });
@@ -1366,74 +1370,46 @@ app.post("/sendProjectGroupMessage", upload.single("attachment"), async (req, re
 
 app.get("/getProjectGroupMessages", async (req, res) => {
   try {
-    const projectId = req.query.projectId;
+    const { projectId } = req.query;
+    if (!projectId) {
+      return res.status(400).json({ message: "projectId is required!" });
+    }
     const messages = await ProjectGroupMessage
       .find({ projectId })
       .populate("senderId", "name profilePic")
       .populate({
-          path: "replyTo",
-          populate: {
-              path: "senderId",
-              select: "name"
-          }
+        path: "replyTo",
+        populate: {
+          path: "senderId",
+          select: "name"
+        }
       })
       .sort({ createdAt: 1 });
     res.json(messages);
   } catch (err) {
-    console.error("Project Group fetch error:", err);
-    res.status(500).json({
-      message: "Project group messages fetch failed"
-    });
+    console.error("❌ Project Group fetch error:", err);
+    res.status(500).json({ message: "Project group messages fetch failed" });
   }
 });
 
-/* ================= GET OR CREATE PROJECT GROUP ================= */
-
-app.get("/getProjectGroup/:projectId", async (req, res) => {
-  try {
-    const { projectId } = req.params;
-    let group = await ProjectGroup.findOne({ projectId });
-    if (!group) {
-      group = new ProjectGroup({
-        projectId: projectId,
-        groupName: "Project Chat",
-        groupImage: ""
-      });
-      await group.save();
-    }
-    res.json(group);
-  } catch (err) {
-    console.error("Get Project Group Error:", err);
-    res.status(500).json({
-      message: "Project group fetch failed"
-    });
-  }
-});
-
-/* ================= PROJECT GROUP INBOX ================= */
+/* ================= PROJECT GROUP INBOX (LAST MESSAGE) ================= */
 
 app.get("/projectGroupInbox/:projectId", async (req, res) => {
   try {
     const { projectId } = req.params;
-    const group = await ProjectGroup.findOne({ projectId });
-    if (!group) {
-      return res.json([]);
-    }
     const lastMessage = await ProjectGroupMessage
-      .findOne({ groupId: group._id })
+      .findOne({ projectId })
+      .populate("senderId", "name")
       .sort({ createdAt: -1 });
     res.json({
-      groupId: group._id,
-      groupName: group.groupName,
-      groupImage: group.groupImage,
-      lastMessage: lastMessage?.message || lastMessage?.text || "",
-      time: lastMessage?.createdAt || group.createdAt
+      projectId,
+      lastMessage: lastMessage?.message || (lastMessage?.attachments?.filename ? "📎 Attachment" : ""),
+      lastSender: lastMessage?.senderId?.name || "",
+      time: lastMessage?.createdAt || null
     });
   } catch (err) {
-    console.error("Project Inbox Error:", err);
-    res.status(500).json({
-      message: "Project Group Inbox Failed"
-    });
+    console.error("❌ Project Inbox Error:", err);
+    res.status(500).json({ message: "Project Group Inbox Failed" });
   }
 });
 
@@ -1454,7 +1430,7 @@ app.put("/editProjectGroupMessage/:messageId", async (req, res) => {
     await msg.save();
     res.json(msg);
   } catch (err) {
-    console.error("Edit Project Message Error:", err);
+    console.error("❌ Edit Project Message Error:", err);
     res.status(500).json({ message: "Edit failed" });
   }
 });
@@ -1471,17 +1447,16 @@ app.put("/deleteProjectGroupMessage/:messageId", async (req, res) => {
     if (String(msg.senderId) !== String(userId)) {
       return res.status(403).json({ message: "You can delete only your own message." });
     }
-    if (msg.attachments && msg.attachments.filename && msg.attachments.attachmentSetPath !== null) {
+    if (msg.attachments && msg.attachments.filename) {
       const absoluteTargetPhysicalPath = path.join(__dirname, 'uploads', 'temp', msg.attachments.filename);
       if (fs.existsSync(absoluteTargetPhysicalPath)) {
         fs.unlinkSync(absoluteTargetPhysicalPath);
-        console.log(`🗑️ Success Cleanup: File '${msg.attachments.filename}' automatically purged.`);
       }
     }
     await ProjectGroupMessage.findByIdAndDelete(req.params.messageId);
     res.json({ success: true });
   } catch (err) {
-    console.error("Delete Project Message Error:", err);
+    console.error("❌ Delete Project Message Error:", err);
     res.status(500).json({ message: "Delete failed" });
   }
 });

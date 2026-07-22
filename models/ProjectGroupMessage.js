@@ -1,8 +1,9 @@
 const mongoose = require("mongoose");
+
 const ProjectGroupMessageSchema = new mongoose.Schema({
-    groupId: {
+    projectId: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: "ProjectGroup",
+        ref: "Project",
         required: true
     },
     senderId: {
@@ -40,4 +41,5 @@ const ProjectGroupMessageSchema = new mongoose.Schema({
         ref: "User"
     }]
 }, { timestamps: true });
+
 module.exports = mongoose.model("ProjectGroupMessage", ProjectGroupMessageSchema);
