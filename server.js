@@ -1459,52 +1459,6 @@ app.put("/editProjectGroupMessage/:messageId", async (req, res) => {
   }
 });
 
-/* ================= GET PROJECT MEMBERS ================= */
-
-app.get("/getProjectMembers/:projectId", async (req, res) => {
-  try {
-    const { projectId } = req.params;
-    const Project = mongoose.model("Project");
-    const project = await Project.findById(projectId);
-    if (!project) {
-      return res.status(404).json({ message: "Project not found" });
-    }
-    const owner = await User.findById(project.vendorId);
-    const projectEmployees = await User.find({
-      role: "customer",
-      "projectData": {
-        $elemMatch: {
-          projectId: projectId,
-          inProject: true
-        }
-      }
-    });
-    const ownerObj = owner ? {
-      _id: owner._id,
-      name: owner.companyName || owner.name,
-      profilePic: owner.companyLogo || owner.profilePic,
-      phone: owner.phone || "",
-      designation: "Owner",
-      role: "company",
-      subRole: "super admin"
-    } : null;
-    const formattedEmployees = projectEmployees.map(emp => ({
-      _id: emp._id,
-      name: emp.name,
-      profilePic: emp.profilePic,
-      phone: emp.phone || "",
-      designation: emp.designation || "Staff",
-      role: emp.role,
-      subRole: emp.subRole
-    }));
-    const members = ownerObj ? [ownerObj, ...formattedEmployees] : formattedEmployees;
-    res.json(members);
-  } catch (err) {
-    console.error("Get Project Members Error:", err);
-    res.status(500).json({ message: "Failed to fetch project members" });
-  }
-});
-
 /* ================= DELETE PROJECT GROUP MESSAGE ================= */
 
 app.put("/deleteProjectGroupMessage/:messageId", async (req, res) => {
