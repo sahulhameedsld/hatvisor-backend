@@ -10,6 +10,8 @@ const SavedCache = require("./models/SavedCache");
 const Notification = require("./models/Notification");
 const Group = require("./models/Group");
 const GroupMessage = require("./models/GroupMessage");
+const ProjectGroup = require("./models/ProjectGroup");
+const ProjectGroupMessage = require("./models/ProjectGroupMessage");
 
 const fs = require("fs");
 const path = require("path");
@@ -1323,6 +1325,211 @@ app.get('/download-file/:filename', (req, res) => {
     } else {
         return res.status(404).send('File not found or already purged.');
     }
+});
+
+/* ================= PROJECT GROUP CHAT SEND ================= */
+
+app.post("/sendProjectGroupMessage", upload.single("attachment"), async (req, res) => {
+  try {
+    const { senderId, groupId, message, replyTo } = req.body;
+    let attachmentData = { filename: "", attachmentSetPath: "uploads/temp" };
+    if (req.file) {
+      attachmentData.filename = req.file.filename;
+    }
+    const msg = new ProjectGroupMessage({
+      senderId,
+      projectId,
+      message,
+      attachments: attachmentData,
+      replyTo: replyTo || null
+    });
+    await msg.save();
+    const populated = await ProjectGroupMessage.findById(msg._id)
+      .populate("senderId", "name profilePic")
+      .populate({
+        path: "replyTo",
+        populate: {
+          path: "senderId",
+          select: "name"
+        }
+      });
+    res.json(populated);
+  } catch (err) {
+    console.error("Project Group send error:", err);
+    res.status(500).json({
+      message: "Project group message send failed"
+    });
+  }
+});
+
+/* ================= PROJECT GROUP CHAT RECEIVE ================= */
+
+app.get("/getProjectGroupMessages", async (req, res) => {
+  try {
+    const projectId = req.query.projectId;
+    const messages = await ProjectGroupMessage
+      .find({ projectId })
+      .populate("senderId", "name profilePic")
+      .populate({
+          path: "replyTo",
+          populate: {
+              path: "senderId",
+              select: "name"
+          }
+      })
+      .sort({ createdAt: 1 });
+    res.json(messages);
+  } catch (err) {
+    console.error("Project Group fetch error:", err);
+    res.status(500).json({
+      message: "Project group messages fetch failed"
+    });
+  }
+});
+
+/* ================= GET OR CREATE PROJECT GROUP ================= */
+
+app.get("/getProjectGroup/:projectId", async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    let group = await ProjectGroup.findOne({ projectId });
+    if (!group) {
+      group = new ProjectGroup({
+        projectId: projectId,
+        groupName: "Project Chat",
+        groupImage: ""
+      });
+      await group.save();
+    }
+    res.json(group);
+  } catch (err) {
+    console.error("Get Project Group Error:", err);
+    res.status(500).json({
+      message: "Project group fetch failed"
+    });
+  }
+});
+
+/* ================= PROJECT GROUP INBOX ================= */
+
+app.get("/projectGroupInbox/:projectId", async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const group = await ProjectGroup.findOne({ projectId });
+    if (!group) {
+      return res.json([]);
+    }
+    const lastMessage = await ProjectGroupMessage
+      .findOne({ groupId: group._id })
+      .sort({ createdAt: -1 });
+    res.json({
+      groupId: group._id,
+      groupName: group.groupName,
+      groupImage: group.groupImage,
+      lastMessage: lastMessage?.message || lastMessage?.text || "",
+      time: lastMessage?.createdAt || group.createdAt
+    });
+  } catch (err) {
+    console.error("Project Inbox Error:", err);
+    res.status(500).json({
+      message: "Project Group Inbox Failed"
+    });
+  }
+});
+
+/* ================= EDIT PROJECT GROUP MESSAGE ================= */
+
+app.put("/editProjectGroupMessage/:messageId", async (req, res) => {
+  try {
+    const { senderId, message } = req.body;
+    const msg = await ProjectGroupMessage.findById(req.params.messageId);
+    if (!msg) {
+      return res.status(404).json({ message: "Not Found" });
+    }
+    if (String(msg.senderId) !== String(senderId)) {
+      return res.status(403).json({ message: "Permission denied" });
+    }
+    msg.message = message;
+    msg.isEdited = true;
+    await msg.save();
+    res.json(msg);
+  } catch (err) {
+    console.error("Edit Project Message Error:", err);
+    res.status(500).json({ message: "Edit failed" });
+  }
+});
+
+/* ================= GET PROJECT MEMBERS ================= */
+
+app.get("/getProjectMembers/:projectId", async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const Project = mongoose.model("Project");
+    const project = await Project.findById(projectId);
+    if (!project) {
+      return res.status(404).json({ message: "Project not found" });
+    }
+    const owner = await User.findById(project.vendorId);
+    const projectEmployees = await User.find({
+      role: "customer",
+      "projectData": {
+        $elemMatch: {
+          projectId: projectId,
+          inProject: true
+        }
+      }
+    });
+    const ownerObj = owner ? {
+      _id: owner._id,
+      name: owner.companyName || owner.name,
+      profilePic: owner.companyLogo || owner.profilePic,
+      phone: owner.phone || "",
+      designation: "Owner",
+      role: "company",
+      subRole: "super admin"
+    } : null;
+    const formattedEmployees = projectEmployees.map(emp => ({
+      _id: emp._id,
+      name: emp.name,
+      profilePic: emp.profilePic,
+      phone: emp.phone || "",
+      designation: emp.designation || "Staff",
+      role: emp.role,
+      subRole: emp.subRole
+    }));
+    const members = ownerObj ? [ownerObj, ...formattedEmployees] : formattedEmployees;
+    res.json(members);
+  } catch (err) {
+    console.error("Get Project Members Error:", err);
+    res.status(500).json({ message: "Failed to fetch project members" });
+  }
+});
+
+/* ================= DELETE PROJECT GROUP MESSAGE ================= */
+
+app.put("/deleteProjectGroupMessage/:messageId", async (req, res) => {
+  try {
+    const { userId } = req.body;
+    const msg = await ProjectGroupMessage.findById(req.params.messageId);
+    if (!msg) {
+      return res.status(404).json({ message: "Message not found" });
+    }
+    if (String(msg.senderId) !== String(userId)) {
+      return res.status(403).json({ message: "You can delete only your own message." });
+    }
+    if (msg.attachments && msg.attachments.filename && msg.attachments.attachmentSetPath !== null) {
+      const absoluteTargetPhysicalPath = path.join(__dirname, 'uploads', 'temp', msg.attachments.filename);
+      if (fs.existsSync(absoluteTargetPhysicalPath)) {
+        fs.unlinkSync(absoluteTargetPhysicalPath);
+        console.log(`🗑️ Success Cleanup: File '${msg.attachments.filename}' automatically purged.`);
+      }
+    }
+    await ProjectGroupMessage.findByIdAndDelete(req.params.messageId);
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Delete Project Message Error:", err);
+    res.status(500).json({ message: "Delete failed" });
+  }
 });
 
 /* ================= FORGET PASSWORD ================= */
