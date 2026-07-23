@@ -1883,7 +1883,8 @@ app.get("/getPublicLabours", async (req, res) => {
     const { city, role } = req.query; // Role search-um backend-ke anuppidalaam   
     // 1. Initial Filter: Assigned illadha workers-ah mattum edu
     let filter = {
-      role: "labour",
+      role: "labour", 
+      "supplyData.dispatchStatus": { $ne: "shipped" },
       $or: [
         { assignType: { $in: ["", null, "removed"] } },
         {
