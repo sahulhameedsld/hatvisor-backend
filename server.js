@@ -4653,6 +4653,7 @@ app.put("/updateInventoryItem/:itemId", async (req, res) => {
           }
         );
         if (value === "delivered") {
+          const activeDriverId = targetItem.driverDetails?._id;
           await User.updateMany(
             { role: "labour", "supplyData._id": itemObjectId },
             { $pull: { supplyData: { _id: itemObjectId } } }
@@ -4661,6 +4662,14 @@ app.put("/updateInventoryItem/:itemId", async (req, res) => {
             { role: "labour", "projectData.materialStock._id": itemObjectId },
             { $pull: { "projectData.$[].materialStock": { _id: itemObjectId } } }
           );
+          if (activeDriverId) {
+            await User.findByIdAndUpdate(activeDriverId, {
+              $pull: { 
+                supplyData: { _id: itemObjectId },
+                "projectData.$[].materialStock": { _id: itemObjectId }
+              }
+            });
+          }
           await User.updateMany(
             { role: "labour", "projectData.materialStock": { $size: 0 } },
             { $pull: { projectData: { materialStock: { $size: 0 } } } }
