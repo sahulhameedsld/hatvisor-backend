@@ -1,5 +1,6 @@
 const express = require("express");
 const mongoose = require("mongoose");
+require("dotenv").config();
 const router = express.Router();
 const nodemailer = require('nodemailer');
 const bcrypt = require('bcrypt');
@@ -12,6 +13,12 @@ const Group = require("./models/Group");
 const GroupMessage = require("./models/GroupMessage");
 const ProjectGroup = require("./models/ProjectGroup");
 const ProjectGroupMessage = require("./models/ProjectGroupMessage");
+const Razorpay = require("razorpay");
+
+const razorpay = new Razorpay({
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET,
+});
 
 const fs = require("fs");
 const path = require("path");
@@ -586,7 +593,43 @@ const UserSchema = new mongoose.Schema({
         }
     }
   ],
-  createdAt: { type: Date, default: Date.now }
+  createdAt: { type: Date, default: Date.now },
+  subscription:{
+    plan:{
+        type:String,
+        default:"trial"
+    },
+    payment:{
+        type:Boolean,
+        default:false
+    },
+    trialStart:{
+        type:Date,
+        default:Date.now
+    },
+    trialEnd:{
+        type:Date,
+        default:function(){
+            return new Date(Date.now()+14*24*60*60*1000);
+        }
+    },
+    subscriptionStart:{
+        type:Date,
+        default:null
+    },
+    subscriptionEnd:{
+        type:Date,
+        default:null
+    },
+    paymentId:{
+        type:String,
+        default:""
+    },
+    orderId:{
+        type:String,
+        default:""
+    }
+  }
 });
 
 
@@ -4898,6 +4941,123 @@ app.get("/getProjectSupplies/:projectId", async (req, res) => {
   } catch (err) {
     console.error("Error fetching project supplies buddy:", err);
     res.status(500).json({ success: false, message: "Internal server error buddy" });
+  }
+});
+
+/* ================= 7.1.CHECK SUBSCRIPTION ================= */
+
+app.get("/checkSubscription/:userId", async (req, res) => {
+  try {
+    let user = await User.findById(req.params.userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+    if (user.role === "customer" && user.usedBy) {
+      user = await User.findById(user.usedBy);
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          message: "Company not found"
+        });
+      }
+    }
+    const today = new Date();
+    let locked = false;
+    let remainingDays = 0;
+    if (!user.subscription.payment) {
+      remainingDays = Math.ceil(
+        (new Date(user.subscription.trialEnd) - today) /
+        (1000 * 60 * 60 * 24)
+      );
+      if (remainingDays < 0) remainingDays = 0;
+      if (today > new Date(user.subscription.trialEnd)) {
+        locked = true;
+      }
+    }
+    else {
+      remainingDays = Math.ceil(
+        (new Date(user.subscription.subscriptionEnd) - today) /
+        (1000 * 60 * 60 * 24)
+      );
+      if (remainingDays < 0) remainingDays = 0;
+      if (today > new Date(user.subscription.subscriptionEnd)) {
+        user.subscription.plan = "trial";
+        user.subscription.payment = false;
+        user.subscription.trialStart = new Date();
+        user.subscription.trialEnd = new Date(
+          Date.now() + 14 * 24 * 60 * 60 * 1000
+        );
+        user.subscription.subscriptionStart = null;
+        user.subscription.subscriptionEnd = null;
+        user.day = 1;
+        await user.save();
+        locked = false;
+        remainingDays = 14;
+      }
+    }
+    res.json({
+      success: true,
+      locked,
+      payment: user.subscription.payment,
+      plan: user.subscription.plan,
+      remainingDays,
+      subscription: user.subscription,
+      day: user.day || 1,
+      companyId: user._id
+    });
+  }
+  catch (err) {
+    console.log(err);
+    res.status(500).json({
+      success: false,
+      message: err.message
+    });
+  }
+});
+
+/* ================= 7.2 CREATE RAZORPAY ORDER ================= */
+
+app.post("/createOrder", async (req, res) => {
+  try {
+    const { userId, plan } = req.body;
+    let amount = 0;
+    switch (plan) {
+      case "6months":
+        amount = 2499;
+        break;
+      case "yearly":
+        amount = 3999;
+        break;
+      default:
+        return res.status(400).json({
+          success: false,
+          message: "Invalid plan"
+        });
+    }
+    const options = {
+      amount: amount * 100,
+      currency: "INR",
+      receipt: `receipt_${Date.now()}`,
+      notes: {
+        userId,
+        plan
+      }
+    };
+    const order = await razorpay.orders.create(options);
+    res.json({
+      success: true,
+      order,
+      key: process.env.RAZORPAY_KEY_ID
+    });
+  } catch (err) {
+    console.log(err);
+    res.status(500).json({
+      success: false,
+      message: "Unable to create order"
+    });
   }
 });
 
