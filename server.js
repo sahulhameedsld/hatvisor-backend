@@ -593,55 +593,80 @@ const UserSchema = new mongoose.Schema({
   rating: { type: Number, default: 0 },
   ratedBy: [
     {
-        vendorId:{
-            type:mongoose.Schema.Types.ObjectId,
-            ref:"User"
-        },
-        companyName:String,
-        companyLogo:String,
-        companyLocation:String,
-        rating:Number,
-        ratedAt:{
-            type:Date,
-            default:Date.now
-        }
+      vendorId:{
+          type:mongoose.Schema.Types.ObjectId,
+          ref:"User"
+      },
+      companyName:String,
+      companyLogo:String,
+      companyLocation:String,
+      rating:Number,
+      ratedAt:{
+          type:Date,
+          default:Date.now
+      }
     }
   ],
+ 
   createdAt: { type: Date, default: Date.now },
+
+  /* SUBSCRIPTION */
   subscription:{
     plan:{
-        type:String,
-        default:"trial"
+      type:String,
+      default:"trial"
     },
     payment:{
-        type:Boolean,
-        default:false
+      type:Boolean,
+      default:false
     },
     trialStart:{
-        type:Date,
-        default:Date.now
+      type:Date,
+      default:Date.now
     },
     trialEnd:{
-        type:Date,
-        default:function(){
-            return new Date(Date.now()+14*24*60*60*1000);
-        }
+      type:Date,
+      default:function(){
+          return new Date(Date.now()+14*24*60*60*1000);
+      }
     },
     subscriptionStart:{
-        type:Date,
-        default:null
+      type:Date,
+      default:null
     },
     subscriptionEnd:{
-        type:Date,
-        default:null
+      type:Date,
+      default:null
     },
     paymentId:{
-        type:String,
-        default:""
+      type:String,
+      default:""
     },
     orderId:{
-        type:String,
-        default:""
+      type:String,
+      default:""
+    }
+  },
+
+  /* DASHBOARD SETTINGS */
+  dashboardSettings: {
+    headerBackground: {
+      type: String,
+      default: "#0F1B2D"
+    },
+    headerFontColor: {
+      type: String,
+      default: "#FFFFFF"
+    },
+    modules: {
+      employees: {
+        type: Boolean,
+        default: true
+      },
+      production: {
+        type: Boolean,
+        default: true
+      }
     }
   }
 });
@@ -5071,6 +5096,35 @@ app.post("/createOrder", async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Unable to create order"
+    });
+  }
+});
+
+/* ================= 8.1.UPDATE DASHBOARD SETTINGS ================= */
+
+app.put("/updateDashboardSettings/:userId", async (req, res) => {
+  try {
+    const user = await User.findById(req.params.userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+    if (user.role !== "company") {
+      return res.status(403).json({
+        success: false,
+        message: "Only Company Owner can update dashboard settings."
+      });
+    }
+    user.dashboardSettings = req.body;
+    await user.save();
+    res.json(user);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({
+      success: false,
+      message: "Dashboard settings update failed."
     });
   }
 });
