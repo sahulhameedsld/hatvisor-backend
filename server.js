@@ -15,24 +15,10 @@ const ProjectGroup = require("./models/ProjectGroup");
 const ProjectGroupMessage = require("./models/ProjectGroupMessage");
 const Razorpay = require("razorpay");
 
-let razorpay = null;
-
-if (
-    process.env.RAZORPAY_KEY_ID &&
-    process.env.RAZORPAY_KEY_SECRET &&
-    process.env.RAZORPAY_KEY_ID !== "rzp_test_xxxxxxxxxx"
-) {
-    const Razorpay = require("razorpay");
-
-    razorpay = new Razorpay({
-        key_id: process.env.RAZORPAY_KEY_ID,
-        key_secret: process.env.RAZORPAY_KEY_SECRET
-    });
-
-    console.log("✅ Razorpay Initialized");
-} else {
-    console.log("⚠ Razorpay Disabled");
-}
+const razorpay = new Razorpay({
+    key_id: process.env.RAZORPAY_KEY_ID,
+    key_secret: process.env.RAZORPAY_KEY_SECRET
+});
 
 const fs = require("fs");
 const path = require("path");
