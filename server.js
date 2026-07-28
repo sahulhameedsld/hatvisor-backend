@@ -652,7 +652,7 @@ const UserSchema = new mongoose.Schema({
   dashboardSettings: {
     headerBackground: {
       type: String,
-      default: "#0F1B2D"
+      default: "linear-gradient(180deg, #2D435C 0%, #1E3148 50%, #0F1B2D 100%)"
     },
     headerFontColor: {
       type: String,
