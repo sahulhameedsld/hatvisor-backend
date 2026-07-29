@@ -13,7 +13,6 @@ const Group = require("./models/Group");
 const GroupMessage = require("./models/GroupMessage");
 const ProjectGroup = require("./models/ProjectGroup");
 const ProjectGroupMessage = require("./models/ProjectGroupMessage");
-const Razorpay = require("razorpay");
 
 const Razorpay = require("razorpay");
 let razorpay = null;
