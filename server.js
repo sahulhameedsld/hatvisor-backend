@@ -13,23 +13,12 @@ const Group = require("./models/Group");
 const GroupMessage = require("./models/GroupMessage");
 const ProjectGroup = require("./models/ProjectGroup");
 const ProjectGroupMessage = require("./models/ProjectGroupMessage");
-
 const Razorpay = require("razorpay");
-let razorpay = null;
-if (
-    process.env.RAZORPAY_KEY_ID &&
-    process.env.RAZORPAY_KEY_SECRET
-) {
-    razorpay = new Razorpay({
-        key_id: process.env.RAZORPAY_KEY_ID,
-        key_secret: process.env.RAZORPAY_KEY_SECRET
-    });
-    console.log("✅ Razorpay Enabled");
-} else {
-    console.log("❌ Razorpay Keys Missing");
-}
-console.log("KEY =", process.env.RAZORPAY_KEY_ID);
-console.log("SECRET =", process.env.RAZORPAY_KEY_SECRET ? "FOUND" : "NOT FOUND");
+
+const razorpay = new Razorpay({
+    key_id: process.env.RAZORPAY_KEY_ID,
+    key_secret: process.env.RAZORPAY_KEY_SECRET
+});
 
 const fs = require("fs");
 const path = require("path");
@@ -5091,16 +5080,10 @@ app.post("/createOrder", async (req, res) => {
       key: process.env.RAZORPAY_KEY_ID
     });
   } catch (err) {
-    console.log("========== CREATE ORDER ERROR ==========");
     console.log(err);
-
-    if (err.error) {
-      console.log(err.error);
-    }
-
     res.status(500).json({
       success: false,
-      message: err.error?.description || err.message
+      message: "Unable to create order"
     });
   }
 });
