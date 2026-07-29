@@ -5046,15 +5046,17 @@ app.get("/checkSubscription/:userId", async (req, res) => {
 /* ================= 7.2 CREATE RAZORPAY ORDER ================= */
 
 app.post("/createOrder", async (req, res) => {
+  console.log("===== CREATE ORDER API HIT =====");
+  console.log(req.body);
   try {
     const { userId, plan } = req.body;
     let amount = 0;
     switch (plan) {
       case "6months":
-        amount = 2499;
+        amount = 399;
         break;
       case "yearly":
-        amount = 3999;
+        amount = 899;
         break;
       default:
         return res.status(400).json({
