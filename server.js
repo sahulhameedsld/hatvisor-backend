@@ -5080,10 +5080,16 @@ app.post("/createOrder", async (req, res) => {
       key: process.env.RAZORPAY_KEY_ID
     });
   } catch (err) {
+    console.log("========== CREATE ORDER ERROR ==========");
     console.log(err);
+
+    if (err.error) {
+      console.log(err.error);
+    }
+
     res.status(500).json({
       success: false,
-      message: "Unable to create order"
+      message: err.error?.description || err.message
     });
   }
 });
