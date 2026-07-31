@@ -4443,17 +4443,14 @@ app.post("/createSupplyItem", async (req, res) => {
       const projectOwner = await User.findOne({
         "projectData.projectId": finalProjectId,
         $or: [
-          { "projectData.materialStock.materialId": cleanMaterialId },
+          ...(cleanMaterialId ?[{ "projectData.materialStock.materialId": cleanMaterialId }] : []),
           { "projectData.materialStock.materialName": materialName }
         ]
       });
       if (projectOwner) {
         await User.updateMany(
           { "projectData.projectId": finalProjectId, 
-            $or: [
-              { "projectData.materialStock.materialId": cleanMaterialId },
-              { "projectData.materialStock.materialName": materialName }
-            ]
+            role: { $ne: "labour" }
           },
           {
             $set: {
@@ -4466,13 +4463,21 @@ app.post("/createSupplyItem", async (req, res) => {
               "projectData.$[proj].materialStock.$[stock].dispatchStatus": "shipped"
             }
           },
-          { arrayFilters: [{ "proj.projectId": finalProjectId }, 
-            { $or: [{ "stock.materialId": cleanMaterialId }, { "stock.materialName": materialName }] 
-          }] }
+          { 
+            arrayFilters: [
+              { "proj.projectId": finalProjectId }, 
+              { 
+                $or: [
+                  ...(cleanMaterialId ? [{ "stock.materialId": cleanMaterialId }] : []),
+                  { "stock.materialName": materialName }
+                ] 
+              }
+            ] 
+          }
         );
       } else {
         await User.updateMany(
-          { "projectData.projectId": finalProjectId }, 
+          { "projectData.projectId": finalProjectId, role: { $ne: "labour" } }, 
           {
             $push: {
               "projectData.$[proj].materialStock": {
@@ -4496,9 +4501,12 @@ app.post("/createSupplyItem", async (req, res) => {
         );
       }
       // 🔔 TRIGGER: Find all users associated to this specific projectId layout and push individual alerts
-      if (cleanMaterialId) {
+      if (cleanMaterialId || materialName) {
         const materialStakeholders = await User.find({
-          "supplyData.materialId": cleanMaterialId
+          $or: [
+            ...(cleanMaterialId ? [{ "supplyData.materialId": cleanMaterialId }] : []),
+            { "supplyData.materialName": materialName }
+          ]
         });
         for (let userNode of materialStakeholders) {
           if (String(userNode._id) !== String(vendorId)) {
