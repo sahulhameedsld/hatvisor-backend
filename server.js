@@ -62,6 +62,31 @@ transporter.verify(function (error, success) {
   }
 });
 
+/* ================= DOWNLOAD FILE ROUTE ================= */
+
+app.get("/download-file/:filename", (req, res) => {
+    try {
+        const filename = req.params.filename;
+        const filePath = path.join(__dirname, "uploads", "temp", filename);
+        if (fs.existsSync(filePath)) {
+            res.download(filePath, (err) => {
+                if (err) {
+                    console.error("Error sending file:", err);
+                    if (!res.headersSent) {
+                        res.status(500).json({ message: "File transfer failed" });
+                    }
+                }
+            });
+        } else {
+            console.log(`❌ File not found on server temp folder: ${filename}`);
+            res.status(404).json({ message: "File not found or expired" });
+        }
+    } catch (err) {
+        console.error("Download route error:", err);
+        res.status(500).json({ message: "Internal server error during download" });
+    }
+});
+
 /* ================= HELPER TO SAFELY DELETE FILE ================= */
 
 const deletePhysicalFile = (fileName) => {
