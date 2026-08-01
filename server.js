@@ -1039,26 +1039,18 @@ io.on("connection", (socket) => {
 
 /* ================= CHAT COMPANY SEND ================= */
 
-app.post("/sendMessage", upload.single("attachment"), async (req, res) => {
+app.post("/sendMessage", async (req, res) => {
   try {
     const { senderId, receiverId, text } = req.body;
- 
-    let attachmentData = { filename: "", attachmentSetPath: "uploads/temp" };
-    if (req.file) {
-      attachmentData.filename = req.file.filename;
-    }
-
     const msg = new Message({
       senderId,
       receiverId,
-      text: text || "",
-      attachments: attachmentData
+      text
     });
-
     await msg.save();
     res.json(msg);
   } catch (err) {
-    console.log("Send message backend error:", err);
+    console.log(err);
     res.status(500).json({ message: "Send failed" });
   }
 });
