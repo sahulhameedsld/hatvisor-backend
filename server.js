@@ -1039,7 +1039,15 @@ io.on("connection", (socket) => {
 
 /* ================= CHAT COMPANY SEND ================= */
 
-app.post("/sendMessage", upload.single("attachment"), async (req, res) => {
+app.post("/sendMessage", (req, res, next) => {
+  upload.single("attachment")(req, res, (err) => {
+    if (err) {
+      console.log("Multer upload error:", err);
+      return res.status(400).json({ message: "File upload failed", error: err.message });
+    }
+    next();
+  });
+}, async (req, res) => {
   try {
     const { senderId, receiverId, text } = req.body;
     let attachmentData = { filename: "", attachmentSetPath: "uploads/temp" };
@@ -1055,7 +1063,7 @@ app.post("/sendMessage", upload.single("attachment"), async (req, res) => {
     await msg.save();
     res.json(msg);
   } catch (err) {
-    console.log("Send message backend error:", err);
+    console.log("Send message backend save error:", err);
     res.status(500).json({ message: "Send failed" });
   }
 });
