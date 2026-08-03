@@ -5139,28 +5139,25 @@ app.post("/createOrder", async (req, res) => {
 
 app.put("/updateDashboardSettings/:userId", async (req, res) => {
   try {
-    const user = await User.findById(req.params.userId);
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found"
-      });
+    const owner = await User.findById(req.params.userId);
+    if (!owner) {
+      return res.status(404).json({ success: false, message: "User not found" });
     }
-    if (user.role !== "company") {
-      return res.status(403).json({
-        success: false,
-        message: "Only Company Owner can update dashboard settings."
-      });
+    if (owner.role !== "company") {
+      return res.status(403).json({ success: false, message: "Only Company Owner can update dashboard settings." });
     }
-    user.dashboardSettings = req.body;
-    await user.save();
-    res.json(user);
+    // 1. Update the Company Owner's settings
+    owner.dashboardSettings = req.body;
+    await owner.save();
+    // 2. 🔥 Automatically update all employees whose `usedBy` matches this Company Owner's ID!
+    await User.updateMany(
+      { usedBy: owner._id },
+      { $set: { dashboardSettings: req.body } }
+    );
+    res.json(owner);
   } catch (err) {
     console.error(err);
-    res.status(500).json({
-      success: false,
-      message: "Dashboard settings update failed."
-    });
+    res.status(500).json({ success: false, message: "Dashboard settings update failed." });
   }
 });
 
