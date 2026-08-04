@@ -5146,7 +5146,7 @@ app.put("/updateDashboardSettings/:userId", async (req, res) => {
     if (owner.role !== "company") {
       return res.status(403).json({ success: false, message: "Only Company Owner can update dashboard settings." });
     }
-    // 1. Update Company Owner settings
+    // 1. Update Company Owner's main dashboard settings
     owner.dashboardSettings = req.body;
     await owner.save();
     // 2. Automatically update all employees whose `usedBy` matches this Company Owner's ID
