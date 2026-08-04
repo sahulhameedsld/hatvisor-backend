@@ -5146,28 +5146,13 @@ app.put("/updateDashboardSettings/:userId", async (req, res) => {
     if (owner.role !== "company") {
       return res.status(403).json({ success: false, message: "Only Company Owner can update dashboard settings." });
     }
-    // 1. Prepare settings data safely
-    const newSettings = {
-      company: {
-        headerBackground: req.body.company?.headerBackground || owner.dashboardSettings?.company?.headerBackground || "#075E54",
-        headerFontColor: req.body.company?.headerFontColor || owner.dashboardSettings?.company?.headerFontColor || "#FFFFFF"
-      },
-      project: {
-        headerBackground: req.body.project?.headerBackground || owner.dashboardSettings?.project?.headerBackground || "#2D435C",
-        headerFontColor: req.body.project?.headerFontColor || owner.dashboardSettings?.project?.headerFontColor || "#FFFFFF"
-      },
-      modules: {
-        employees: req.body.modules?.employees ?? owner.dashboardSettings?.modules?.employees ?? true,
-        production: req.body.modules?.production ?? owner.dashboardSettings?.modules?.production ?? true
-      }
-    };
-    // 2. Update Company Owner settings
-    owner.dashboardSettings = newSettings;
+    // 1. Update Company Owner settings
+    owner.dashboardSettings = req.body;
     await owner.save();
-    // 3. Update all employees under this owner (`usedBy`)
+    // 2. Automatically update all employees whose `usedBy` matches this Company Owner's ID
     await User.updateMany(
       { usedBy: owner._id },
-      { $set: { dashboardSettings: newSettings } }
+      { $set: { dashboardSettings: req.body } }
     );
     res.json(owner);
   } catch (err) {
