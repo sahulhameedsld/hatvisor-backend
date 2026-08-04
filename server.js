@@ -5154,10 +5154,16 @@ app.put("/updateDashboardSettings/:userId", async (req, res) => {
       { usedBy: owner._id },
       { $set: { dashboardSettings: req.body } }
     );
-    await Project.updateMany(
-      { vendorId: owner._id }, 
-      { $set: { dashboardSettings: req.body } }
-    );
+    try {
+      if (typeof Project !== 'undefined') {
+        await Project.updateMany(
+          { vendorId: owner._id }, 
+          { $set: { dashboardSettings: req.body } }
+        );
+      }
+    } catch (projErr) {
+      console.log("Project update skipped/failed:", projErr.message);
+    }
     res.json(owner);
   } catch (err) {
     console.error(err);
