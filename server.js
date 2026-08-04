@@ -5146,26 +5146,19 @@ app.put("/updateDashboardSettings/:userId", async (req, res) => {
     if (owner.role !== "company") {
       return res.status(403).json({ success: false, message: "Only Company Owner can update dashboard settings." });
     }
-    // 1. Update the Company Owner's settings
+    // 1. Update Company Owner settings
     owner.dashboardSettings = req.body;
     await owner.save();
-    // 2. 🔥 Automatically update all employees whose `usedBy` matches this Company Owner's ID!
+    // 2. Update employees under this owner (`usedBy`)
     await User.updateMany(
       { usedBy: owner._id },
       { $set: { dashboardSettings: req.body } }
     );
-    try {
-      await Project.updateMany(
-        { vendorId: owner._id }, 
-        { 
-          $set: { 
-            "dashboardSettings": req.body
-          } 
-        }
-      );
-    } catch (projErr) {
-      console.log("Project update skipped/failed:", projErr.message);
-    }
+    // 3. 🔥 Automatically update all Projects belonging to this vendor!
+    await Project.updateMany(
+      { vendorId: owner._id }, 
+      { $set: { dashboardSettings: req.body } }
+    );
     res.json(owner);
   } catch (err) {
     console.error(err);
