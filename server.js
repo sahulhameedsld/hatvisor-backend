@@ -5154,6 +5154,11 @@ app.put("/updateDashboardSettings/:userId", async (req, res) => {
       { usedBy: owner._id },
       { $set: { dashboardSettings: req.body } }
     );
+    // 3. 🔥 Automatically update projects inside `projectData` for this owner & all employees!
+    await User.updateMany(
+      { $or: [{ _id: owner._id }, { usedBy: owner._id }] },
+      { $set: { "dashboardSettings.project": req.body.project } }
+    );
     res.json(owner);
   } catch (err) {
     console.error("Dashboard update error:", err);
