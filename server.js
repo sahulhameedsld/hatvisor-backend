@@ -5149,19 +5149,14 @@ app.put("/updateDashboardSettings/:userId", async (req, res) => {
     // 1. Update Company Owner settings
     owner.dashboardSettings = req.body;
     await owner.save();
-    // 2. Update employees under this owner (`usedBy`)
+    // 2. Automatically update all employees whose `usedBy` matches this Company Owner's ID
     await User.updateMany(
       { usedBy: owner._id },
       { $set: { dashboardSettings: req.body } }
     );
-    // 3. 🔥 Automatically update all Projects belonging to this vendor!
-    await Project.updateMany(
-      { vendorId: owner._id }, 
-      { $set: { dashboardSettings: req.body } }
-    );
     res.json(owner);
   } catch (err) {
-    console.error(err);
+    console.error("Dashboard update error:", err);
     res.status(500).json({ success: false, message: "Dashboard settings update failed." });
   }
 });
