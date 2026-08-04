@@ -5159,8 +5159,7 @@ app.put("/updateDashboardSettings/:userId", async (req, res) => {
         { vendorId: owner._id }, 
         { 
           $set: { 
-            "dashboardSettings.project": req.body.project,
-            "dashboardSettings.company": req.body.company
+            "dashboardSettings": req.body
           } 
         }
       );
