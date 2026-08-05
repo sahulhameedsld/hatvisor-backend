@@ -1579,14 +1579,13 @@ app.post('/api/forget-password/verify', async (req, res) => {
     }
     let targetEmail = "";
     let targetCompanyName = "";
-    let isSelfRegistered = !user.createdBy;
-    if (isSelfRegistered) {
-      targetEmail = user.email; 
-      targetCompanyName = user.companyName || "Hatvisor Enterprise";
-    } else {
-        targetEmail = user.createdBy.email || user.email;
-        targetCompanyName = user.createdBy.companyName || "Hatvisor Enterprise";
+    if (user.email) {
+      targetEmail = user.email;
+    } else if (user.createdBy && user.createdBy.email) {
+      targetEmail = user.createdBy.email;
     }
+    targetCompanyName = (user.createdBy && user.createdBy.companyName) || user.companyName || "Hatvisor Enterprise";
+    let isSelfRegistered = !user.createdBy || !user.createdBy.email;
     if (!targetEmail) {
       return res.status(400).json({ 
           success: false, 
