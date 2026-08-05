@@ -1584,13 +1584,8 @@ app.post('/api/forget-password/verify', async (req, res) => {
       targetEmail = user.email; 
       targetCompanyName = user.companyName || "Hatvisor Enterprise";
     } else {
-      if (user.createdBy && user.createdBy.email) {
         targetEmail = user.createdBy.email;
         targetCompanyName = user.createdBy.companyName || "Hatvisor Enterprise";
-      } else {
-        targetEmail = user.email;
-        targetCompanyName = "Hatvisor Enterprise";
-      }
     }
     if (!targetEmail) {
       return res.status(400).json({ 
@@ -1627,7 +1622,7 @@ app.post('/api/forget-password/verify', async (req, res) => {
       console.error("❌ Mail Transport Core Scrambled:", mailError);
       return res.status(500).json({ 
         success: false, 
-        message: "Mail server failed to send message. Please check server logs." + mailError.message,
+        message: "Mail server failed to send message. Please check server logs.",
         technicalDetails: mailError.message 
       });
     }
