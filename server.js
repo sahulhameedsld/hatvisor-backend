@@ -1583,9 +1583,11 @@ app.post('/api/forget-password/verify', async (req, res) => {
     if (isSelfRegistered) {
       targetEmail = user.email; 
       targetCompanyName = user.companyName || "Hatvisor Enterprise";
+      targetCompanyLogo = user.profilePic || "";
     } else {
         targetEmail = user.createdBy.email;
         targetCompanyName = user.createdBy.companyName || "Hatvisor Enterprise";
+        targetCompanyLogo = user.createdBy.profilePic || "";
     }
     if (!targetEmail) {
       return res.status(400).json({ 
@@ -1630,6 +1632,7 @@ app.post('/api/forget-password/verify', async (req, res) => {
       success: true,
       userName: user.name,
       companyName: targetCompanyName,
+      companyLogo: targetCompanyLogo,
       targetEmail: targetEmail,
       message: `OTP successfully dispatched to target email layout.`
     });
