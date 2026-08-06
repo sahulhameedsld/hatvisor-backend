@@ -1573,7 +1573,7 @@ app.put("/deleteProjectGroupMessage/:messageId", async (req, res) => {
 app.post('/api/forget-password/verify', async (req, res) => {
   const { phone } = req.body;
   try {
-    const user = await User.findOne({ phone });
+    const user = await User.findOne({ phone }).populate('createdBy');
     if (!user) {
         return res.status(404).json({ success: false, message: "User with this phone number not found!" });
     }
@@ -1583,37 +1583,26 @@ app.post('/api/forget-password/verify', async (req, res) => {
     let targetCompanyLogo = "";
     let isSelfRegistered = !user.createdBy;
 
-    // 🔥 Safely handle createdBy whether it's an ObjectId reference or a String ID
-    let creatorUser = null;
-    if (!isSelfRegistered) {
-        creatorUser = await User.findById(user.createdBy);
-    }
-
-    if (isSelfRegistered || !creatorUser) {
+    if (isSelfRegistered) {
       targetEmail = user.email; 
       targetCompanyName = user.companyName || "Hatvisor Enterprise";
       targetCompanyLogo = user.profilePic || "";
-      isSelfRegistered = true; // Fallback to self if creator not found
     } else {
         targetEmail = creatorUser.email;
         targetCompanyName = creatorUser.companyName || "Hatvisor Enterprise";
         targetCompanyLogo = creatorUser.profilePic || "";
     }
-
     if (!targetEmail) {
       return res.status(400).json({ 
           success: false, 
           message: isSelfRegistered ? "User profile email address missing!" : "Vendor email reference missing!" 
       });
     }
-
     const generatedOTP = Math.floor(100000 + Math.random() * 900000).toString();
     user.resetOTP = generatedOTP;
     user.resetOTPExpires = Date.now() + 5 * 60 * 1000;
     await user.save();
-
     console.log(`🔑 Generated OTP [${generatedOTP}] for User [${user.name}] sending to [${targetEmail}]`);
-    
     const mailOptions = {
       from: '"Hatvisor Security" <seo@asi.acousticalsurfaces.in>',
       to: targetEmail,
@@ -1631,7 +1620,6 @@ app.post('/api/forget-password/verify', async (req, res) => {
           </div>
       `
     };
-
     try {
       const info = await transporter.sendMail(mailOptions);
       console.log("📨 Mail dispatch success. MessageId: ", info.messageId);
@@ -1643,7 +1631,6 @@ app.post('/api/forget-password/verify', async (req, res) => {
         technicalDetails: mailError.message 
       });
     }
-
     return res.json({
       success: true,
       userName: user.name,
