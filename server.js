@@ -1583,7 +1583,7 @@ app.post('/api/forget-password/verify', async (req, res) => {
     let targetCompanyLogo = "";
     let isSelfRegistered = !user.createdBy;
 
-    if (isSelfRegistered || !user.createdBy.email) {
+    if (isSelfRegistered) {
       targetEmail = user.email; 
       targetCompanyName = user.companyName || "Hatvisor Enterprise";
       targetCompanyLogo = user.profilePic || "";
