@@ -1573,16 +1573,9 @@ app.put("/deleteProjectGroupMessage/:messageId", async (req, res) => {
 app.post('/api/forget-password/verify', async (req, res) => {
   const { phone } = req.body;
   try {
-    const user = await User.findOne({ phone });
+    const user = await User.findOne({ phone }).populate('createdBy');
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User with this phone number not found!"
-      });
-    }
-    let creator = null;
-    if (user.createdBy) {
-      creator = await User.findById(user.createdBy);
+        return res.status(404).json({ success: false, message: "User with this phone number not found!" });
     }
 
     let targetEmail = "";
@@ -1590,14 +1583,14 @@ app.post('/api/forget-password/verify', async (req, res) => {
     let targetCompanyLogo = "";
     let isSelfRegistered = !user.createdBy;
 
-    if (isSelfRegistered || !creator) {
-      targetEmail = user.email;
+    if (isSelfRegistered || !user.createdBy.email) {
+      targetEmail = user.email; 
       targetCompanyName = user.companyName || "Hatvisor Enterprise";
       targetCompanyLogo = user.profilePic || "";
     } else {
-      targetEmail = creator.email;
-      targetCompanyName = creator.companyName || "Hatvisor Enterprise";
-      targetCompanyLogo = creator.profilePic || "";
+        targetEmail = user.createdBy.email;
+        targetCompanyName = user.createdBy.companyName || "Hatvisor Enterprise";
+        targetCompanyLogo = user.createdBy.profilePic || "";
     }
     if (!targetEmail) {
       return res.status(400).json({ 
@@ -1631,11 +1624,11 @@ app.post('/api/forget-password/verify', async (req, res) => {
       const info = await transporter.sendMail(mailOptions);
       console.log("📨 Mail dispatch success. MessageId: ", info.messageId);
     } catch (mailError) {
-      console.error(mailError);
-      return res.status(500).json({
-        success: false,
-        message: mailError.message,
-        stack: mailError.stack
+      console.error("❌ Mail Transport Core Scrambled:", mailError);
+      return res.status(500).json({ 
+        success: false, 
+        message: "Mail server failed to send message. Please check server logs.",
+        technicalDetails: mailError.message 
       });
     }
     return res.json({
