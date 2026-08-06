@@ -1588,9 +1588,9 @@ app.post('/api/forget-password/verify', async (req, res) => {
       targetCompanyName = user.companyName || "Hatvisor Enterprise";
       targetCompanyLogo = user.profilePic || "";
     } else {
-        targetEmail = creatorUser.email;
-        targetCompanyName = creatorUser.companyName || "Hatvisor Enterprise";
-        targetCompanyLogo = creatorUser.profilePic || "";
+        targetEmail = user.createdBy.email;
+        targetCompanyName = user.createdBy.companyName || "Hatvisor Enterprise";
+        targetCompanyLogo = user.createdBy.profilePic || "";
     }
     if (!targetEmail) {
       return res.status(400).json({ 
