@@ -29,7 +29,7 @@ const s3 = new S3Client({
     secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
   },
 });
-
+console.log("AWS Config Check -> Bucket Name:", process.env.AWS_BUCKET_NAME, "Region:", process.env.AWS_REGION);
 const path = require("path");
 const cron = require('node-cron');
 
