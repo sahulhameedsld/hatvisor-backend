@@ -5190,4 +5190,6 @@ app.put("/updateDashboardSettings/:userId", async (req, res) => {
 /* ================= SERVER ================= */
 
 const PORT = 5000;
-server.listen(PORT, '0.0.0.0', () => console.log(`🚀 Server running safely on port ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Server running safely on port ${PORT}`);
+});
