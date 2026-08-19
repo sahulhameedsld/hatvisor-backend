@@ -752,10 +752,10 @@ app.post("/uploadDP/:id", upload.single("dp"), async(req,res)=>{
     if (!req.file) {
       return res.status(400).json({ message: "No file uploaded buddy!" });
     }
-    const filename = path.basename(req.file.key);
+    const profileUrl = req.file.key;
     const user = await User.findByIdAndUpdate(
       req.params.id,
-      { profilePic:req.file.filename },
+      { profilePic:profileUrl },
       { returnDocument: 'after' }
     );
     res.json(user);
@@ -772,10 +772,10 @@ app.post("/uploadCompanyCover/:id", upload.single("cover"), async (req, res) => 
     if (!req.file) {
       return res.status(400).json({ message: "No file uploaded buddy!" });
     }
-    const logoUrl = req.file.key;
+    const coverUrl = req.file.key;
     const user = await User.findByIdAndUpdate(
       req.params.id,
-      { companyCover: logoUrl },
+      { companyCover: coverUrl },
       { returnDocument: 'after' }
     );
     res.json(user);
