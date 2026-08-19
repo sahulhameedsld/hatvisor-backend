@@ -792,10 +792,10 @@ app.post("/uploadCompanyLogo/:id", upload.single("logo"), async(req,res)=>{
     if(!req.file){
     return res.status(400).json({message:"No file"});
   }
-  const filename = path.basename(req.file.key);
+  const logoUrl = req.file.key;
   const user = await User.findByIdAndUpdate(
     req.params.id,
-    { companyLogo:req.file.filename },
+    { companyLogo: logoUrl },
     { returnDocument: 'after' }
   );
   res.json(user);
