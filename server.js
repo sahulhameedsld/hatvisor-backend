@@ -4,6 +4,8 @@ require("dotenv").config();
 const router = express.Router();
 const nodemailer = require('nodemailer');
 const bcrypt = require('bcrypt');
+const { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } = require("@aws-sdk/client-s3");
+const multerS3 = require("multer-s3");
 const multer = require("multer");
 const cors = require("cors");
 const Attendance = require('./attendanceModle');
@@ -16,29 +18,24 @@ const ProjectGroupMessage = require("./models/ProjectGroupMessage");
 const Razorpay = require("razorpay");
 
 const razorpay = new Razorpay({
-    key_id: process.env.RAZORPAY_KEY_ID,
-    key_secret: process.env.RAZORPAY_KEY_SECRET
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET
 });
 
-const fs = require("fs");
+const s3 = new S3Client({
+  region: process.env.AWS_REGION,
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  },
+});
+
 const path = require("path");
 const cron = require('node-cron');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
-
-const cacheDir = path.join(__dirname, "uploads", "cache");
-if (!fs.existsSync(cacheDir)){
-    fs.mkdirSync(cacheDir, { recursive: true });
-}
-const tempDir = path.join(__dirname, "uploads", "temp");
-if (!fs.existsSync(tempDir)){
-    fs.mkdirSync(tempDir, { recursive: true });
-}
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
-app.use("/uploads/cache", express.static(path.join(__dirname, "uploads/cache")));
-app.use("/uploads/temp", express.static(path.join(__dirname, "uploads/temp")));
 
 /* ================= VERIFY PHONE & GENERATE OTP & SEND MAIL TO VENDOR ================= */
 
@@ -62,76 +59,47 @@ transporter.verify(function (error, success) {
   }
 });
 
-/* ================= DOWNLOAD FILE ROUTE ================= */
+/* ================= DOWNLOAD FILE ROUTE (FROM S3) ================= */
 
-app.get("/download-file/:filename", (req, res) => {
-    try {
-        const filename = req.params.filename;
-        const filePath = path.join(__dirname, "uploads", "temp", filename);
-        if (fs.existsSync(filePath)) {
-            res.download(filePath, (err) => {
-                if (err) {
-                    console.error("Error sending file:", err);
-                    if (!res.headersSent) {
-                        res.status(500).json({ message: "File transfer failed" });
-                    }
-                }
-            });
-        } else {
-            console.log(`❌ File not found on server temp folder: ${filename}`);
-            res.status(404).json({ message: "File not found or expired" });
-        }
-    } catch (err) {
-        console.error("Download route error:", err);
-        res.status(500).json({ message: "Internal server error during download" });
+app.get("/download-file/:filename", async (req, res) => {
+  try {
+    const filename = req.params.filename;
+    const key = `uploads/temp/${filename}`;
+    const command = new GetObjectCommand({
+        Bucket: process.env.AWS_BUCKET_NAME,
+        Key: key,
+    });
+    const s3Response = await s3.send(command);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    if (s3Response.ContentType) {
+        res.setHeader('Content-Type', s3Response.ContentType);
     }
+    s3Response.Body.pipe(res);
+  } catch (err) {
+    console.error(`❌ File not found on S3 temp folder or expired: ${req.params.filename}`, err);
+    res.status(404).json({ message: "File not found or expired" });
+  }
 });
 
 /* ================= HELPER TO SAFELY DELETE FILE ================= */
 
-const deletePhysicalFile = (fileName) => {
-  const tempPath = path.join(__dirname, 'uploads/temp', fileName);
-  if (fs.existsSync(tempPath)) {
-    fs.unlink(tempPath, (err) => {
-      if (err) console.error("Error deleting temp file:", err);
-      else console.log(`Successfully deleted ${fileName} from temp space permanently!`);
+const deletePhysicalFile = async (fileName) => {
+  try {
+    const command = new DeleteObjectCommand({
+      Bucket: process.env.AWS_BUCKET_NAME,
+      Key: `uploads/temp/${fileName}`,
     });
+    await s3.send(command);
+    console.log(`Successfully deleted ${fileName} from S3 temp space permanently!`);
+  } catch (err) {
+    console.error("Error deleting temp file from S3:", err);
   }
 };
-
-/* ================= 24-HOUR STALE ASSETS FORCE CLEANUP ================= */
-
-cron.schedule('0 * * * *', () => {
-  console.log("Running hourly temp cleanup verification scheduler...");
-  const tempDir = path.join(__dirname, 'uploads/temp');
-  fs.readdir(tempDir, (err, files) => {
-    if (err) {
-      console.error("Failed to read temp directory:", err);
-      return;
-    }
-    const now = Date.now();
-    const expiryDuration = 24 * 60 * 60 * 1000;
-    files.forEach((file) => {
-      const filePath = path.join(tempDir, file);
-      fs.stat(filePath, (statErr, stats) => {
-        if (statErr) return;
-        const fileAge = now - new Date(stats.mtime).getTime();
-        if (fileAge > expiryDuration) {
-          fs.unlink(filePath, (unlinkErr) => {
-            if (unlinkErr) console.error(`Hourly cron run: could not delete ${file}`, unlinkErr);
-            else console.log(`Hourly cron cleanups: 24h Expired file removed - ${file}`);
-          });
-        }
-      });
-    });
-  });
-});
 
 /* ================= 🔔 CENTRAL NOTIFICATION HELPER ENGINE ================= */
 
 async function triggerNotification({ recipientId, senderId, senderName, senderPic, type, title, message, projectId = "", viewName = "" }) {
   try {
-    // Unga core requirement padi exact target user-ku mattum dynamic notification create aagum
     const newNotif = new Notification({
       recipientId,
       senderId,
@@ -179,32 +147,27 @@ setInterval(async () => {
   }
 }, 30 * 60 * 1000);
 
-/* ================= MULTER ================= */
-
-const storage = multer.diskStorage({
-  destination: (req,file,cb)=>{
-    let uploadPath = 'uploads/';
-    if (file.fieldname === 'attachment') {
-      uploadPath = 'uploads/temp/';
-    } else if (file.fieldname === 'logo') {
-      uploadPath = 'uploads/logos/';
-    } else if (file.fieldname === 'product') {
-      uploadPath = 'uploads/products/';
-    }
-    if (!fs.existsSync(uploadPath)) {
-      fs.mkdirSync(uploadPath, { recursive: true });
-    }
-    cb(null, uploadPath);
-  },
-  filename: (req,file,cb)=>{
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, uniqueSuffix + path.extname(file.originalname));
-  }
-});
-
 /* ================= UPLOAD STORAGE ================= */
 
-const upload = multer({ storage: storage });
+const upload = multer({
+  storage: multerS3({
+    s3: s3,
+    bucket: process.env.AWS_BUCKET_NAME,
+    acl: 'public-read',
+    key: function (req, file, cb) {
+      let folder = 'uploads/';
+      if (file.fieldname === 'attachment') {
+          folder = 'uploads/temp/';
+      } else if (file.fieldname === 'logo') {
+          folder = 'uploads/logos/';
+      } else if (file.fieldname === 'product') {
+          folder = 'uploads/products/';
+      }
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+      cb(null, folder + uniqueSuffix + path.extname(file.originalname));
+    }
+  })
+});
 
 /* ================= ROUTE ================= */
 
@@ -213,17 +176,12 @@ app.post("/upload", upload.single("task"), (req, res) => {
     if (!req.file) {
       return res.status(400).json({ msg: "No file uploaded" });
     }
-    // Success: Return the filename
     res.json({ imageUrl: req.file.filename }); 
   } catch (err) {
     console.error("Upload Error:", err);
     res.status(500).json({ msg: "Upload failed" });
   }
 });
-
-/* ================= STATIC ================= */
-
-app.use("/uploads", express.static("uploads"));
 
 /* ================= MONGODB ================= */
 
@@ -791,6 +749,10 @@ app.put("/updateUser/:id", async(req,res)=>{
 
 app.post("/uploadDP/:id", upload.single("dp"), async(req,res)=>{
   try{
+    if (!req.file) {
+      return res.status(400).json({ message: "No file uploaded buddy!" });
+    }
+    const filename = path.basename(req.file.key);
     const user = await User.findByIdAndUpdate(
       req.params.id,
       { profilePic:req.file.filename },
@@ -810,6 +772,7 @@ app.post("/uploadCompanyCover/:id", upload.single("cover"), async (req, res) => 
     if (!req.file) {
       return res.status(400).json({ message: "No file uploaded buddy!" });
     }
+    const filename = path.basename(req.file.key);
     const user = await User.findByIdAndUpdate(
       req.params.id,
       { companyCover: req.file.filename },
@@ -829,6 +792,7 @@ app.post("/uploadCompanyLogo/:id", upload.single("logo"), async(req,res)=>{
     if(!req.file){
     return res.status(400).json({message:"No file"});
   }
+  const filename = path.basename(req.file.key);
   const user = await User.findByIdAndUpdate(
     req.params.id,
     { companyLogo:req.file.filename },
@@ -885,7 +849,7 @@ app.post("/addProduct/:id", upload.single("image"), async (req, res) => {
     };
     // 🖼 Only update image if new file exists
     if (req.file) {
-      updatedProduct.image = req.file.filename;
+      updatedProduct.image = path.basename(req.file.key);
     }
     // 🔄 Save into array
     if (index !== undefined && index !== "") {
@@ -1153,7 +1117,8 @@ app.post("/sendGroupMessage", upload.single("attachment"), async (req, res) => {
     const { senderId, groupId, message, replyTo } = req.body;
     let attachmentData = { filename: "", attachmentSetPath: "uploads/temp" };
     if (req.file) {
-      attachmentData.filename = req.file.filename;
+      const fullKey = req.file.key;
+      attachmentData.filename = path.basename(fullKey);
     }
     const msg = new GroupMessage({
       senderId,
@@ -1401,12 +1366,13 @@ app.put("/deleteGroupMessage/:messageId", async (req, res) => {
         message: "You can delete only your own message."
       });
     }
-    if (msg.attachments && msg.attachments.filename && msg.attachments.attachmentSetPath !== null) {
-      const absoluteTargetPhysicalPath = path.join(__dirname, 'uploads', 'temp', msg.attachments.filename);
-      if (fs.existsSync(absoluteTargetPhysicalPath)) {
-        fs.unlinkSync(absoluteTargetPhysicalPath);
-        console.log(`🗑️ Success Cleanup: File '${msg.attachments.filename}' automatically purged from uploads/temp because sender deleted the message.`);
-      }
+    if (msg.attachments && msg.attachments.filename) {
+      const deleteCommand = new DeleteObjectCommand({
+        Bucket: process.env.AWS_BUCKET_NAME,
+        Key: `uploads/temp/${msg.attachments.filename}`,
+      });
+      await s3.send(deleteCommand);
+      console.log(`🗑️ Success Cleanup: File '${msg.attachments.filename}' purged from S3 temp.`);
     }
     await GroupMessage.findByIdAndDelete(req.params.messageId);
     res.json({
@@ -1422,16 +1388,24 @@ app.put("/deleteGroupMessage/:messageId", async (req, res) => {
 
 /* ================= DOWNLOAD ATTACHMENT FILE ================= */
 
-app.get('/download-file/:filename', (req, res) => {
+app.get('/download-file/:filename', async (req, res) => {
+  try {
     const filename = req.params.filename;
-    const filePath = path.join(__dirname, 'uploads', 'temp', filename);
-    if (fs.existsSync(filePath)) {
-        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-        res.setHeader('Content-Type', 'application/octet-stream');
-        return res.download(filePath, filename);
-    } else {
-        return res.status(404).send('File not found or already purged.');
+    const key = `uploads/temp/${filename}`;
+    const command = new GetObjectCommand({
+        Bucket: process.env.AWS_BUCKET_NAME,
+        Key: key,
+    });
+    const s3Response = await s3.send(command);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    if (s3Response.ContentType) {
+        res.setHeader('Content-Type', s3Response.ContentType);
     }
+    s3Response.Body.pipe(res);
+  } catch (err) {
+    console.error(`❌ File not found on S3 temp or already purged: ${req.params.filename}`, err);
+    return res.status(404).send('File not found or already purged.');
+  }
 });
 
 /* ================= PROJECT GROUP CHAT SEND ================= */
@@ -1444,7 +1418,7 @@ app.post("/sendProjectGroupMessage", upload.single("attachment"), async (req, re
     }
     let attachmentData = { filename: "", attachmentSetPath: "uploads/temp" };
     if (req.file) {
-      attachmentData.filename = req.file.filename;
+      attachmentData.filename = path.basename(req.file.key);
     }
     const msg = new ProjectGroupMessage({
       senderId,
@@ -1555,10 +1529,12 @@ app.put("/deleteProjectGroupMessage/:messageId", async (req, res) => {
       return res.status(403).json({ message: "You can delete only your own message." });
     }
     if (msg.attachments && msg.attachments.filename) {
-      const absoluteTargetPhysicalPath = path.join(__dirname, 'uploads', 'temp', msg.attachments.filename);
-      if (fs.existsSync(absoluteTargetPhysicalPath)) {
-        fs.unlinkSync(absoluteTargetPhysicalPath);
-      }
+      const deleteCommand = new DeleteObjectCommand({
+        Bucket: process.env.AWS_BUCKET_NAME,
+        Key: `uploads/temp/${msg.attachments.filename}`,
+      });
+      await s3.send(deleteCommand);
+      console.log(`🗑️ Success Cleanup: File '${msg.attachments.filename}' purged from S3 temp.`);
     }
     await ProjectGroupMessage.findByIdAndDelete(req.params.messageId);
     res.json({ success: true });
@@ -1688,8 +1664,8 @@ app.post("/createLabour", upload.fields([
       return res.status(400).json({ message: "Labour already registered!", isDuplicate: true });
     }
 
-    const profilePicFile = req.files['dp'] ? req.files['dp'][0].filename : "";
-    const idProofFile = req.files['idCard'] ? req.files['idCard'][0].filename : "";
+    const profilePicFile = req.files['dp'] ? path.basename(req.files['dp'][0].key) : "";
+    const idProofFile = req.files['idCard'] ? path.basename(req.files['idCard'][0].key) : "";
 
     const labour = new User({
       name,
@@ -1698,7 +1674,6 @@ app.post("/createLabour", upload.fields([
       role: "labour",
       createdBy: vendorId,
       address,
-      // 🌟 THE FIX: Inga 'work' nu potturundheenga, adhai 'jobRole' nu mathunga
       jobRole: jobRole, 
       profilePic: profilePicFile,
       idProof: idProofFile,
@@ -1910,8 +1885,8 @@ app.put("/updateLabourUser/:id", upload.fields([
       delete updateFields.password;
     }
     if (req.files) {
-      if (req.files.dp) updateFields.profilePic = req.files.dp[0].filename;
-      if (req.files.idCard) updateFields.idProof = req.files.idCard[0].filename;
+      if (req.files['dp']) updateFields.profilePic = path.basename(req.files['dp'][0].key);
+      if (req.files['idCard']) updateFields.idProof = path.basename(req.files['idCard'][0].key);
     }
     const updated = await User.findByIdAndUpdate(
       req.params.id,
@@ -1955,8 +1930,6 @@ app.put("/removeLabourFromVendor/:id", async (req, res) => {
 app.get("/searchGlobalLabour", async (req, res) => {
   try {
     const { phone } = req.query;
-    console.log("Searching for phone:", phone); // Log panni paarunga terminal-la
-    // Strict Filter: role 'labour' & phone match
     const labour = await User.findOne({ 
       phone: String(phone), // String-ah convert pannikonga safe-ku
       role: "labour" 
@@ -1978,7 +1951,6 @@ app.put("/multiAssignLabours", async (req, res) => {
     if (!Array.isArray(labourIds) || labourIds.length === 0) {
       return res.status(400).json({ message: "No labours selected" });
     }
-    // updateMany use panni array-la irukura ellarukkum bulk update pandroam
     await User.updateMany(
       { _id: { $in: labourIds } }, 
       { $set: updateData }
@@ -1993,8 +1965,7 @@ app.put("/multiAssignLabours", async (req, res) => {
 
 app.get("/getPublicLabours", async (req, res) => {
   try {
-    const { city, role } = req.query; // Role search-um backend-ke anuppidalaam   
-    // 1. Initial Filter: Assigned illadha workers-ah mattum edu
+    const { city, role } = req.query; 
     let filter = {
       role: "labour", 
       "supplyData.dispatchStatus": { $ne: "shipped" },
@@ -2013,8 +1984,6 @@ app.get("/getPublicLabours", async (req, res) => {
       filter.jobRole = { $regex: new RegExp(role, "i") };
     }
     const allLabours = await User.find(filter);
-    // 3. 🧠 SMART SORTING Logic:
-    // User current city match aagura workers-ah top-la vai, mathavangala aduthu vai.
     const sortedLabours = allLabours.sort((a, b) => {
       const cityA = a.location?.city || a.city || "";
       const cityB = b.location?.city || b.city || "";
@@ -2038,8 +2007,6 @@ app.get("/getPaymentRange", async (req, res) => {
     if (!vendorId || !start || !end) {
       return res.status(400).json({ message: "Missing params" });
     }
-
-    // ✅ Aggregation logic update
     const summary = await Attendance.aggregate([
       { 
         $match: { 
@@ -2099,18 +2066,21 @@ app.post("/createEmployee", upload.single("dp"), async(req,res)=>{
     const sharedImportData = (companyOwner && companyOwner.importData) ? companyOwner.importData : [];
     const sharedProductionData = (companyOwner && companyOwner.productionData) ? companyOwner.productionData : [];
     const sharedMaterialData = (companyOwner && companyOwner.materialData) ? companyOwner.materialData : [];
+    let profilePicFilename = "";
+    if (req.file) {
+      profilePicFilename = path.basename(req.file.key);
+    }
     const emp = new User({
       name,
       phone,
       password,
       email,
       address,
-      profilePic: req.file ? req.file.filename : "",
+      profilePic: profilePicFilename,
       role: "customer",
       createdBy: vendorId,
       usedBy: vendorId, 
       designation: req.body.designation,
-      /* DEFAULT PROJECT ATTACH */
       subRole: req.body.subRole,
       projectData: sharedProjectData,
       supplyData: sharedSupplyData,
@@ -2155,7 +2125,7 @@ app.put("/updateOwner/:id", upload.single("dp"), async(req,res)=>{
       subRole: req.body.subRole
     };
     if(req.file){
-      updateData.profilePic = req.file.filename;
+      updateData.profilePic = path.basename(req.file.key);
     }
     const data = await User.findByIdAndUpdate(
       req.params.id,
@@ -2572,6 +2542,7 @@ app.post("/uploadProductionImage", upload.single("image"), async (req, res) => {
     if (!req.file) {
       return res.status(400).json({ msg: "No file uploaded" });
     }
+    const imageUrl = req.file.location || req.file.key;
     const creator = await User.findById(vendorId);
     if (!creator) {
       return res.status(404).json({ msg: "User not found buddy" });
@@ -2588,7 +2559,7 @@ app.post("/uploadProductionImage", upload.single("image"), async (req, res) => {
         "productionData._id": prodObjectId
       },
       {
-        $set: { [imageKey]: req.file.filename }
+        $set: { [imageKey]: imageUrl }
       },
       {
         arrayFilters: [{ "prod._id": prodObjectId }]
@@ -2607,7 +2578,7 @@ app.post("/uploadProductionImage", upload.single("image"), async (req, res) => {
 app.post("/createMaterial", upload.array('images', 2), async (req, res) => {
   try {
     const { vendorId, productName, qty, description } = req.body;
-    const fileNames = req.files ? req.files.map(f => f.filename) : [];
+    const fileNames = req.files ? req.files.map(f => path.basename(f.key)) : [];
     const creator = await User.findById(vendorId);
     if (!creator) return res.status(404).json({ message: "User not found buddy!" });
     const mainOwnerId = creator.usedBy || creator._id;
@@ -2722,6 +2693,7 @@ app.post("/uploadMaterialImage", upload.single("image"), async (req, res) => {
     }
     const mainOwnerId = creator.usedBy || creator._id;
     const matObjectId = new mongoose.Types.ObjectId(matId);
+    const imageName = path.basename(req.file.key);
     const imageKey = `materialData.$[mat].images.${imgIndex}`;
     await User.updateMany(
       {
@@ -2755,6 +2727,25 @@ app.delete("/deleteMaterial/:vendorId/:matId", async (req, res) => {
     if (!currentUser) return res.status(404).json({ message: "User not found buddy!" });
     const mainOwnerId = currentUser.usedBy || currentUser._id;
     const matObjectId = new mongoose.Types.ObjectId(matId);
+    const ownerUser = await User.findById(mainOwnerId);
+    if (ownerUser && ownerUser.materialData) {
+      const targetMaterial = ownerUser.materialData.find(m => String(m._id) === String(matObjectId));
+      if (targetMaterial && targetMaterial.images) {
+        for (const imgName of targetMaterial.images) {
+          if (imgName) {
+            try {
+              const deleteCommand = new DeleteObjectCommand({
+                Bucket: process.env.AWS_BUCKET_NAME,
+                Key: `uploads/materials/${imgName}`,
+              });
+              await s3.send(deleteCommand);
+            } catch (s3Err) {
+              console.log("S3 material image delete warning:", s3Err);
+            }
+          }
+        }
+      }
+    }
     await User.updateMany(
       { 
         $or: [
@@ -2867,6 +2858,11 @@ app.post("/createProject", upload.single("cover"), async (req, res) => {
     const { vendorId, projectName, location, about, propertyOwners, supportSources } = req.body;
     const user = await User.findById(vendorId);
     if (!user) return res.status(404).json({ msg: "User not found" });
+    let coverFilename = "";
+    if (req.file) {
+      const fullKey = req.file.key;
+      coverFilename = path.basename(fullKey);
+    }
     const parsedLocation = location ? (typeof location === "string" ? JSON.parse(location) : location) : {};
     const rawOwners = propertyOwners ? JSON.parse(propertyOwners) : [];
     const formattedOwners = rawOwners.map(owner => ({
@@ -2890,7 +2886,7 @@ app.post("/createProject", upload.single("cover"), async (req, res) => {
     }));
     const newProject = {
       projectName,
-      cover: req.file ? req.file.filename : "",
+      cover: coverFilename,
       propertyOwners: formattedOwners,
       propertyDetails: {
         location: parsedLocation,
@@ -2922,7 +2918,7 @@ app.post("/createProject", upload.single("cover"), async (req, res) => {
           ownerDoc.projectData.push({
             projectId: createdProjectId,
             projectName: projectName,
-            cover: req.file ? req.file.filename : "",
+            cover: coverFilename,
             propertyDetails: {
               location: parsedLocation,
               about: about || ""
@@ -2946,7 +2942,7 @@ app.post("/createProject", upload.single("cover"), async (req, res) => {
             emp.projectData.push({
               projectId: createdProjectId,
               projectName: projectName,
-              cover: req.file ? req.file.filename : "",
+              cover: coverFilename,
               propertyDetails: {    
                 location: parsedLocation,
                 about: about || ""
@@ -2973,7 +2969,7 @@ app.post("/createProject", upload.single("cover"), async (req, res) => {
           supportDoc.projectData.push({
             projectId: createdProjectId,
             projectName: projectName,
-            cover: req.file ? req.file.filename : "",
+            cover: coverFilename,
             propertyDetails: {
               location: parsedLocation,
               about: about || ""
@@ -2997,7 +2993,7 @@ app.post("/createProject", upload.single("cover"), async (req, res) => {
             emp.projectData.push({
               projectId: createdProjectId,
               projectName: projectName,
-              cover: req.file ? req.file.filename : "",
+              cover: coverFilename,
               propertyDetails: {    
                 location: parsedLocation,
                 about: about || ""
@@ -3029,7 +3025,7 @@ app.post("/createProject", upload.single("cover"), async (req, res) => {
         emp.projectData.push({
           projectId: createdProject._id,
           projectName: createdProject.projectName,
-          cover: req.file ? req.file.filename : "",
+          cover: coverFilename,
           propertyDetails: {    
             location: parsedLocation,
             about: about || ""
@@ -3714,17 +3710,18 @@ app.post("/saveDailyTaskMedia", async (req, res) => {
     if (!project.taskMedia) project.taskMedia = {};
     const oldMedia = project.taskMedia[viewName];
     if (oldMedia && oldMedia.url && oldMedia.url !== url) {
-      const oldFilePath = path.join(__dirname, 'uploads', oldMedia.url);
-      fs.access(oldFilePath, fs.constants.F_OK, (err) => {
-        if (!err) {
-          fs.unlink(oldFilePath, (unlinkErr) => {
-            if (unlinkErr) console.error("Old media delete panna mudiyla buddy:", unlinkErr);
-            else console.log(`Deleted old file from server: ${oldMedia.url} 🗑️`);
-          });
-        } else {
-          console.log("Old file directory-le illai or already deleted buddy.");
-        }
-      });
+      try {
+        const fileName = path.basename(oldMedia.url);
+        const s3Key = oldMedia.url.includes("uploads/") ? oldMedia.url : `uploads/${fileName}`;
+        const deleteCommand = new DeleteObjectCommand({
+          Bucket: process.env.AWS_BUCKET_NAME,
+          Key: s3Key,
+        });
+        await s3.send(deleteCommand);
+        console.log(`🗑️ Deleted old file from S3: ${s3Key}`);
+      } catch (s3Err) {
+        console.error("Old media delete from S3 failed buddy:", s3Err);
+      }
     }
     project.taskMedia[viewName] = { url, fileType };
     user.markModified('projectData'); 
@@ -4021,19 +4018,21 @@ app.post("/handleFeedAction/:actionType", async (req, res) => {
       const existingCache = await SavedCache.findOne({ projectId: projectId, userId: currentUserId });
       if (existingCache) {
         if (existingCache.taskMedia) {
-          Object.values(existingCache.taskMedia).forEach(view => {
+          for (const view of Object.values(existingCache.taskMedia)) {
             if (view && view.url) {
-              const physicalCacheFilePath = path.join(__dirname, "uploads", "cache", view.url);
-              if (fs.existsSync(physicalCacheFilePath)) {
-                try {
-                  fs.unlinkSync(physicalCacheFilePath);
-                  console.log(`Deleted cache file buddy: ${view.url}`);
-                } catch (unlinkErr) {
-                  console.error("File unlink error buddy:", unlinkErr);
-                }
+              const fileNameWithFolder = view.url.includes("amazonaws.com") ? view.url.split(".com/")[1] : `uploads/cache/${view.url}`;
+              try {
+                  const delCommand = new DeleteObjectCommand({
+                  Bucket: process.env.AWS_BUCKET_NAME,
+                  Key: fileNameWithFolder,
+                });
+                await s3.send(delCommand);
+                console.log(`Deleted cache file from S3 buddy: ${fileNameWithFolder}`);
+              } catch (unlinkErr) {
+                console.error("S3 file delete error buddy:", unlinkErr);
               }
             }
-          });
+          }
         }
         if (proj.savedByFeed) {
           const vIdx = proj.savedByFeed.indexOf(currentUserId);
@@ -4053,26 +4052,42 @@ app.post("/handleFeedAction/:actionType", async (req, res) => {
         await vendor.save();
         const snapshotMedia = {};
         const viewsList = ['frontView', 'backView', 'leftView', 'rightView', 'ceilingView', 'floorView'];
-        viewsList.forEach(view => {
+        for (const view of viewsList) {
           const originalFileData = proj.taskMedia?.[view];
           if (originalFileData && originalFileData.url) {
-            const originalFileName = originalFileData.url;
-            const originalFilePath = path.join(__dirname, "uploads", originalFileName);
-            if (fs.existsSync(originalFilePath)) {
-              const cachedUniqueName = `${Date.now()}-${currentUserId}-${originalFileName}`;
-              const destinationCachePath = path.join(__dirname, "uploads", "cache", cachedUniqueName);
-              fs.copyFileSync(originalFilePath, destinationCachePath);
+            const originalFileUrl = originalFileData.url;
+            const sourceKey = originalFileUrl.includes("amazonaws.com") ? originalFileUrl.split(".com/")[1] : originalFileUrl;
+            const extension = path.extname(sourceKey);
+            const cachedUniqueName = `uploads/cache/${Date.now()}-${currentUserId}-${Math.round(Math.random() * 1E9)}${extension}`;
+            try {
+              const getObjCmd = new GetObjectCommand({ Bucket: process.env.AWS_BUCKET_NAME, Key: sourceKey });
+              const s3Res = await s3.send(getObjCmd);
+              const chunks = [];
+              for await (const chunk of s3Res.Body) {
+                chunks.push(chunk);
+              }
+              const fileBuffer = Buffer.concat(chunks);
+              const putObjCmd = new PutObjectCommand({
+                Bucket: process.env.AWS_BUCKET_NAME,
+                Key: cachedUniqueName,
+                Body: fileBuffer,
+                ContentType: s3Res.ContentType || 'image/jpeg',
+                ACL: 'public-read'
+              });
+              await s3.send(putObjCmd);
+              const publicUrl = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${cachedUniqueName}`;
               snapshotMedia[view] = {
-                url: cachedUniqueName,
+                url: publicUrl,
                 fileType: originalFileData.fileType || "image"
               };
-            } else {
+            } catch (copyErr) {
+              console.error(`Error copying media for view ${view} to S3 cache:`, copyErr);
               snapshotMedia[view] = { url: "", fileType: "image" };
             }
           } else {
             snapshotMedia[view] = { url: "", fileType: "image" };
           }
-        });
+        }
         await SavedCache.create({
           projectId: projectId,
           userId: currentUserId,
