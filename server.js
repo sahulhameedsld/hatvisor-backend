@@ -198,6 +198,16 @@ const upload = multer({
         folder = 'uploads/temp/';
       } else if (file.fieldname === 'cache') {
         folder = 'uploads/cache/';
+      } else if (file.fieldname === 'dp') {
+        folder = 'uploads/';
+      } else if (file.fieldname === 'cover') {
+        folder = 'uploads/';
+      } else if (file.fieldname === 'logo') {
+        folder = 'uploads/';
+      } else if (file.fieldname === 'image') {
+        folder = 'uploads/';
+      } else if (file.fieldname === 'task') {
+        folder = 'uploads/';
       } 
       const finalKey = folder + uniqueSuffix + extension;
       console.log(`Uploading ${file.fieldname} to: ${finalKey}`);
