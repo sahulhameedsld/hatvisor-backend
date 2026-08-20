@@ -194,20 +194,12 @@ const upload = multer({
       const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1E9);
       const extension = path.extname(file.originalname);
       let folder = 'uploads/';
-      switch (file.fieldname) {
-        case 'attachment':
-          folder = 'uploads/temp/';
-          break;
-        case 'cache':
-          folder = 'uploads/cache/';
-          break;
-        case 'logo':
-        case 'cover':
-        case 'dp':
-          folder = 'uploads/'; 
-          break;
-        default:
-          folder = 'uploads/';
+      if (file.fieldname === 'attachment') {
+        folder = 'uploads/temp/';
+      } else if (file.fieldname === 'cache') {
+        folder = 'uploads/cache/';
+      } else {
+        folder = 'uploads/';
       }
       const finalKey = folder + uniqueSuffix + extension;
       cb(null, finalKey);
