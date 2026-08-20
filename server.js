@@ -153,7 +153,6 @@ const upload = multer({
   storage: multerS3({
     s3: s3,
     bucket: process.env.AWS_BUCKET_NAME,
-    acl: 'public-read',
     key: function (req, file, cb) {
       let folder = 'uploads/';
       if (file.fieldname === 'attachment') {
@@ -769,6 +768,12 @@ app.post("/uploadDP/:id", upload.single("dp"), async(req,res)=>{
 
 app.post("/uploadCompanyCover/:id", upload.single("cover"), async (req, res) => {
   try {
+    console.log("========== COVER UPLOAD ==========");
+    console.log("File:", req.file);
+    console.log("S3 Key:", req.file?.key);
+    console.log("S3 Location:", req.file?.location);
+    console.log("Bucket:", process.env.AWS_BUCKET_NAME);
+    console.log("Region:", process.env.AWS_REGION);
     if (!req.file) {
       return res.status(400).json({ message: "No file uploaded buddy!" });
     }
@@ -780,8 +785,14 @@ app.post("/uploadCompanyCover/:id", upload.single("cover"), async (req, res) => 
     );
     res.json(user);
   } catch (err) {
-    console.log(err);
-    res.status(500).json({ message: "Cover image upload failed" });
+
+    console.error("========== S3 COVER UPLOAD ERROR ==========");
+    console.error(err);
+
+    res.status(500).json({
+      message: "Cover image upload failed",
+      error: err.message
+    });
   }
 });
 
