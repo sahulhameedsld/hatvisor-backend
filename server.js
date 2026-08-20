@@ -191,20 +191,25 @@ const upload = multer({
     s3: s3,
     bucket: process.env.AWS_BUCKET_NAME,
     key: function (req, file, cb) {
-      const uniqueSuffix =
-        Date.now() + "-" + Math.round(Math.random() * 1E9);
+      const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1E9);
       const extension = path.extname(file.originalname);
       let folder = 'uploads/';
-      if (file.fieldname === 'attachment') {
+      switch (file.fieldname) {
+        case 'attachment':
           folder = 'uploads/temp/';
+          break;
+        case 'cache':
+          folder = 'uploads/cache/';
+          break;
+        case 'logo':
+        case 'cover':
+        case 'dp':
+          folder = 'uploads/'; 
+          break;
+        default:
+          folder = 'uploads/';
       }
       const finalKey = folder + uniqueSuffix + extension;
-      
-      console.log("📦 S3 Upload");
-      console.log("Field:", file.fieldname);
-      console.log("Original:", file.originalname);
-      console.log("S3 Key:", finalKey);
-
       cb(null, finalKey);
     }
   })
