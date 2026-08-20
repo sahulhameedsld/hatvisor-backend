@@ -118,6 +118,43 @@ async function triggerNotification({ recipientId, senderId, senderName, senderPi
   }
 }
 
+/* ================= 24-HOUR S3 TEMP ASSETS FORCE CLEANUP ================= */
+
+cron.schedule('0 * * * *', async () => {
+  console.log("Running hourly S3 temp cleanup verification...");
+  try {
+    const listCommand = new ListObjectsV2Command({
+      Bucket: process.env.AWS_BUCKET_NAME,
+      Prefix: "uploads/temp/"
+    });
+    const s3Response = await s3.send(listCommand);
+    if (!s3Response.Contents || s3Response.Contents.length === 0) {
+      console.log("S3 temp folder is clean.");
+      return;
+    }
+    const now = Date.now();
+    const expiryDuration = 24 * 60 * 60 * 1000;
+    for (const object of s3Response.Contents) {
+      if (!object.Key || !object.LastModified) {
+        continue;
+      }
+      const fileAge = now - new Date(object.LastModified).getTime();
+      if (fileAge > expiryDuration) {
+        const deleteCommand = new DeleteObjectCommand({
+          Bucket: process.env.AWS_BUCKET_NAME,
+          Key: object.Key
+        });
+        await s3.send(deleteCommand);
+        console.log(
+          `🗑️ S3 TEMP CLEANUP: 24h expired file removed -> ${object.Key}`
+        );
+      }
+    }
+  } catch (err) {
+    console.error("❌ S3 temp cleanup failed:", err);
+  }
+});
+
 /* ================= TIME FRAME ================= */
 
 setInterval(async () => {
@@ -154,16 +191,21 @@ const upload = multer({
     s3: s3,
     bucket: process.env.AWS_BUCKET_NAME,
     key: function (req, file, cb) {
+      const uniqueSuffix =
+        Date.now() + "-" + Math.round(Math.random() * 1E9);
+      const extension = path.extname(file.originalname);
       let folder = 'uploads/';
       if (file.fieldname === 'attachment') {
           folder = 'uploads/temp/';
-      } else if (file.fieldname === 'logo') {
-          folder = 'uploads/logos/';
-      } else if (file.fieldname === 'product') {
-          folder = 'uploads/products/';
       }
-      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-      cb(null, folder + uniqueSuffix + path.extname(file.originalname));
+      const finalKey = folder + uniqueSuffix + extension;
+      
+      console.log("📦 S3 Upload");
+      console.log("Field:", file.fieldname);
+      console.log("Original:", file.originalname);
+      console.log("S3 Key:", finalKey);
+
+      cb(null, finalKey);
     }
   })
 });
@@ -173,12 +215,26 @@ const upload = multer({
 app.post("/upload", upload.single("task"), (req, res) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ msg: "No file uploaded" });
+      return res.status(400).json({
+        msg: "No file uploaded"
+      });
     }
-    res.json({ imageUrl: req.file.filename }); 
+    console.log("✅ Upload successful");
+    console.log("Original file:", req.file.originalname);
+    console.log("S3 key:", req.file.key);
+
+    res.json({
+      success: true,
+      imageUrl: path.basename(req.file.key),
+      key: req.file.key,
+      url: req.file.location
+    });
   } catch (err) {
-    console.error("Upload Error:", err);
-    res.status(500).json({ msg: "Upload failed" });
+    console.error("❌ Upload Error:", err);
+    res.status(500).json({
+      success: false,
+      msg: "Upload failed"
+    });
   }
 });
 
@@ -768,12 +824,6 @@ app.post("/uploadDP/:id", upload.single("dp"), async(req,res)=>{
 
 app.post("/uploadCompanyCover/:id", upload.single("cover"), async (req, res) => {
   try {
-    console.log("========== COVER UPLOAD ==========");
-    console.log("File:", req.file);
-    console.log("S3 Key:", req.file?.key);
-    console.log("S3 Location:", req.file?.location);
-    console.log("Bucket:", process.env.AWS_BUCKET_NAME);
-    console.log("Region:", process.env.AWS_REGION);
     if (!req.file) {
       return res.status(400).json({ message: "No file uploaded buddy!" });
     }
@@ -785,14 +835,8 @@ app.post("/uploadCompanyCover/:id", upload.single("cover"), async (req, res) => 
     );
     res.json(user);
   } catch (err) {
-
-    console.error("========== S3 COVER UPLOAD ERROR ==========");
-    console.error(err);
-
-    res.status(500).json({
-      message: "Cover image upload failed",
-      error: err.message
-    });
+    console.log(err);
+    res.status(500).json({ message: "Cover image upload failed" });
   }
 });
 
