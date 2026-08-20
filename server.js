@@ -4,7 +4,7 @@ require("dotenv").config();
 const router = express.Router();
 const nodemailer = require('nodemailer');
 const bcrypt = require('bcrypt');
-const { S3Client, GetObjectCommand, DeleteObjectCommand, ListObjectsV2Command } = require("@aws-sdk/client-s3");
+const { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } = require("@aws-sdk/client-s3");
 const multerS3 = require("multer-s3");
 const multer = require("multer");
 const cors = require("cors");
@@ -190,7 +190,6 @@ const upload = multer({
   storage: multerS3({
     s3: s3,
     bucket: process.env.AWS_BUCKET_NAME,
-    contentType: multerS3.AUTO_CONTENT_TYPE,
     key: function (req, file, cb) {
       const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1E9);
       const extension = path.extname(file.originalname);
@@ -200,7 +199,7 @@ const upload = multer({
       } else if (file.fieldname === 'cache') {
         folder = 'uploads/cache/';
       } 
-      const finalKey = `${folder}${uniqueSuffix}${extension}`;
+      const finalKey = folder + uniqueSuffix + extension;
       console.log(`Uploading ${file.fieldname} to: ${finalKey}`);
       cb(null, finalKey);
     }
@@ -210,18 +209,23 @@ const upload = multer({
 /* ================= ROUTE ================= */
 
 app.post("/upload", upload.single("task"), (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({
-      success: false,
-      message: "No file uploaded"
+  try {
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ msg: "No file uploaded" });
+    }
+    const file = req.files[0]; 
+    console.log("✅ Upload successful | Field:", file.fieldname);
+    console.log("S3 key:", file.key);
+    res.json({
+      success: true,
+      imageUrl: file.key,
+      key: file.key,
+      url: file.location
     });
-  } 
-  res.json({
-    success: true,
-    key: req.file.key,
-    imageUrl: req.file.key,
-    url: req.file.location
-  });
+  } catch (err) {
+    console.error("❌ Upload Error:", err);
+    res.status(500).json({ success: false, msg: "Upload failed" });
+  }
 });
 
 /* ================= MONGODB ================= */
@@ -793,18 +797,16 @@ app.post("/uploadDP/:id", upload.single("dp"), async(req,res)=>{
     if (!req.file) {
       return res.status(400).json({ message: "No file uploaded buddy!" });
     }
+    const profileUrl = req.file.key;
     const user = await User.findByIdAndUpdate(
       req.params.id,
-      { profilePic: req.file.key },
+      { profilePic:profileUrl },
       { returnDocument: 'after' }
     );
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
     res.json(user);
-  } catch (err) {
-    console.error("DP UPLOAD:", err);
-    res.status(500).json({ message: "DP upload failed" });
+  }catch(err){
+    console.log(err);
+    res.status(500).json({ message:"Upload failed" });
   }
 });
 
@@ -815,18 +817,16 @@ app.post("/uploadCompanyCover/:id", upload.single("cover"), async (req, res) => 
     if (!req.file) {
       return res.status(400).json({ message: "No file uploaded buddy!" });
     }
+    const coverUrl = req.file.key;
     const user = await User.findByIdAndUpdate(
       req.params.id,
-      { companyCover: req.file.key },
+      { companyCover: coverUrl },
       { returnDocument: 'after' }
     );
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
     res.json(user);
   } catch (err) {
-    console.error("COVER UPLOAD:", err);
-    res.status(500).json({ message: "Cover upload failed" });
+    console.log(err);
+    res.status(500).json({ message: "Cover image upload failed" });
   }
 });
 
@@ -837,18 +837,16 @@ app.post("/uploadCompanyLogo/:id", upload.single("logo"), async(req,res)=>{
     if(!req.file){
     return res.status(400).json({message:"No file"});
   }
+  const logoUrl = req.file.key;
   const user = await User.findByIdAndUpdate(
     req.params.id,
-    { companyLogo: req.file.key },
+    { companyLogo: logoUrl },
     { returnDocument: 'after' }
   );
-  if (!user) {
-    return res.status(404).json({ message: "User not found" });
-  }
   res.json(user);
-  } catch (err) {
-    console.error("LOGO UPLOAD:", err);
-    res.status(500).json({ message: "Logo upload failed" });
+  }catch(err){
+    console.log(err);
+    res.status(500).json({ message:"Upload failed" });
   }
 });
 
@@ -856,6 +854,8 @@ app.post("/uploadCompanyLogo/:id", upload.single("logo"), async(req,res)=>{
 
 app.post("/addProduct/:id", upload.single("image"), async (req, res) => {
   try {
+    console.log("BODY:", req.body);
+    console.log("FILE:", req.file);
     const { name, price, type, index } = req.body;
     // 🔍 Find user
     const user = await User.findById(req.params.id);
@@ -890,7 +890,7 @@ app.post("/addProduct/:id", upload.single("image"), async (req, res) => {
       name: name || existingProduct.name || "",
       price: price || existingProduct.price || "",
       type: parsedType.length ? parsedType : existingProduct.type || [],
-      image: req.file?.key || existingProduct?.image || ""
+      image: existingProduct.image || "" // 👈 keep old image
     };
     // 🖼 Only update image if new file exists
     if (req.file) {
