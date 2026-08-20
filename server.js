@@ -198,10 +198,9 @@ const upload = multer({
         folder = 'uploads/temp/';
       } else if (file.fieldname === 'cache') {
         folder = 'uploads/cache/';
-      } else {
-        folder = 'uploads/';
-      }
+      } 
       const finalKey = folder + uniqueSuffix + extension;
+      console.log(`Uploading ${file.fieldname} to: ${finalKey}`);
       cb(null, finalKey);
     }
   })
@@ -211,27 +210,21 @@ const upload = multer({
 
 app.post("/upload", upload.single("task"), (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({
-        msg: "No file uploaded"
-      });
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ msg: "No file uploaded" });
     }
-    console.log("✅ Upload successful");
-    console.log("Original file:", req.file.originalname);
-    console.log("S3 key:", req.file.key);
-
+    const file = req.files[0]; 
+    console.log("✅ Upload successful | Field:", file.fieldname);
+    console.log("S3 key:", file.key);
     res.json({
       success: true,
-      imageUrl: path.basename(req.file.key),
-      key: req.file.key,
-      url: req.file.location
+      imageUrl: file.key,
+      key: file.key,
+      url: file.location
     });
   } catch (err) {
     console.error("❌ Upload Error:", err);
-    res.status(500).json({
-      success: false,
-      msg: "Upload failed"
-    });
+    res.status(500).json({ success: false, msg: "Upload failed" });
   }
 });
 
