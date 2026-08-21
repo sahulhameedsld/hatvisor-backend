@@ -4,7 +4,7 @@ require("dotenv").config();
 const router = express.Router();
 const nodemailer = require('nodemailer');
 const bcrypt = require('bcrypt');
-const { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } = require("@aws-sdk/client-s3");
+const { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, ListObjectsV2Command } = require("@aws-sdk/client-s3");
 const multerS3 = require("multer-s3");
 const multer = require("multer");
 const cors = require("cors");
@@ -22,6 +22,10 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_KEY_SECRET
 });
 
+const fs = require("fs");
+const path = require("path");
+const cron = require("node-cron");
+
 const s3 = new S3Client({
   region: process.env.AWS_REGION,
   credentials: {
@@ -29,9 +33,6 @@ const s3 = new S3Client({
     secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
   },
 });
-console.log("AWS Config Check -> Bucket Name:", process.env.AWS_BUCKET_NAME, "Region:", process.env.AWS_REGION);
-const path = require("path");
-const cron = require('node-cron');
 
 const app = express();
 app.use(cors());
@@ -120,25 +121,26 @@ async function triggerNotification({ recipientId, senderId, senderName, senderPi
 
 /* ================= 24-HOUR S3 TEMP ASSETS FORCE CLEANUP ================= */
 
-cron.schedule('0 * * * *', async () => {
-  console.log("Running hourly S3 temp cleanup verification...");
+cron.schedule("0 * * * *", async () => {
+  console.log("🧹 Running hourly S3 temp cleanup...");
   try {
     const listCommand = new ListObjectsV2Command({
       Bucket: process.env.AWS_BUCKET_NAME,
       Prefix: "uploads/temp/"
     });
-    const s3Response = await s3.send(listCommand);
-    if (!s3Response.Contents || s3Response.Contents.length === 0) {
-      console.log("S3 temp folder is clean.");
+    const result = await s3.send(listCommand);
+    if (!result.Contents || result.Contents.length === 0) {
+      console.log("✅ No temp files found in S3.");
       return;
     }
     const now = Date.now();
     const expiryDuration = 24 * 60 * 60 * 1000;
-    for (const object of s3Response.Contents) {
+    for (const object of result.Contents) {
       if (!object.Key || !object.LastModified) {
         continue;
       }
-      const fileAge = now - new Date(object.LastModified).getTime();
+      const fileAge =
+        now - new Date(object.LastModified).getTime();
       if (fileAge > expiryDuration) {
         const deleteCommand = new DeleteObjectCommand({
           Bucket: process.env.AWS_BUCKET_NAME,
@@ -146,12 +148,15 @@ cron.schedule('0 * * * *', async () => {
         });
         await s3.send(deleteCommand);
         console.log(
-          `🗑️ S3 TEMP CLEANUP: 24h expired file removed -> ${object.Key}`
+          `🗑️ S3 24h cleanup deleted: ${object.Key}`
         );
       }
     }
   } catch (err) {
-    console.error("❌ S3 temp cleanup failed:", err);
+    console.error(
+      "❌ S3 temp cleanup failed:",
+      err
+    );
   }
 });
 
@@ -198,16 +203,6 @@ const upload = multer({
         folder = 'uploads/temp/';
       } else if (file.fieldname === 'cache') {
         folder = 'uploads/cache/';
-      } else if (file.fieldname === 'dp') {
-        folder = 'uploads/';
-      } else if (file.fieldname === 'cover') {
-        folder = 'uploads/';
-      } else if (file.fieldname === 'logo') {
-        folder = 'uploads/';
-      } else if (file.fieldname === 'image') {
-        folder = 'uploads/';
-      } else if (file.fieldname === 'task') {
-        folder = 'uploads/';
       } 
       const finalKey = folder + uniqueSuffix + extension;
       console.log(`Uploading ${file.fieldname} to: ${finalKey}`);
@@ -904,7 +899,7 @@ app.post("/addProduct/:id", upload.single("image"), async (req, res) => {
     };
     // 🖼 Only update image if new file exists
     if (req.file) {
-      updatedProduct.image = path.basename(req.file.key);
+      updatedProduct.image = req.file.key;
     }
     // 🔄 Save into array
     if (index !== undefined && index !== "") {
@@ -4075,7 +4070,7 @@ app.post("/handleFeedAction/:actionType", async (req, res) => {
         if (existingCache.taskMedia) {
           for (const view of Object.values(existingCache.taskMedia)) {
             if (view && view.url) {
-              const fileNameWithFolder = view.url.includes("amazonaws.com") ? view.url.split(".com/")[1] : `uploads/cache/${view.url}`;
+              const fileNameWithFolder = view.url.includes("amazonaws.com") ? view.url.split(".com/")[1] : view.url;
               try {
                   const delCommand = new DeleteObjectCommand({
                   Bucket: process.env.AWS_BUCKET_NAME,
