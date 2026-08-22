@@ -795,12 +795,34 @@ app.put("/updateUser/:id", async(req,res)=>{
   }
 });
 
+/* ================= DELETE OLD IMAGES ================= */
+
+const deleteOldImageFromS3 = async (imageUrl) => {
+  if (!imageUrl) return;
+  try {
+    const fileName = path.basename(imageUrl);
+    const s3Key = imageUrl.includes("uploads/") ? imageUrl : `uploads/${fileName}`;
+    const deleteCommand = new DeleteObjectCommand({
+      Bucket: process.env.AWS_BUCKET_NAME,
+      Key: s3Key,
+    });
+    await s3.send(deleteCommand);
+    console.log(`🗑️ Deleted old file from S3: ${s3Key}`);
+  } catch (err) {
+    console.error("Old image delete from S3 failed buddy:", err);
+  }
+};
+
 /* ================= PROFILE DP ================= */
 
-app.post("/uploadDP/:id", upload.single("dp"), async(req,res)=>{
+app.post("/uploadDP/:id", upload.single("dp"), async(req,res) => {
   try{
     if (!req.file) {
       return res.status(400).json({ message: "No file uploaded buddy!" });
+    }
+    const existingUser = await User.findById(req.params.id);
+    if (existingUser && existingUser.profilePic) {
+      await deleteOldImageFromS3(existingUser.profilePic);
     }
     const profileUrl = req.file.key;
     const user = await User.findByIdAndUpdate(
@@ -822,6 +844,10 @@ app.post("/uploadCompanyCover/:id", upload.single("cover"), async (req, res) => 
     if (!req.file) {
       return res.status(400).json({ message: "No file uploaded buddy!" });
     }
+    const existingUser = await User.findById(req.params.id);
+    if (existingUser && existingUser.companyCover) {
+      await deleteOldImageFromS3(existingUser.companyCover);
+    }
     const coverUrl = req.file.key;
     const user = await User.findByIdAndUpdate(
       req.params.id,
@@ -837,10 +863,14 @@ app.post("/uploadCompanyCover/:id", upload.single("cover"), async (req, res) => 
 
 /* ================= COMPANY LOGO ================= */
 
-app.post("/uploadCompanyLogo/:id", upload.single("logo"), async(req,res)=>{
+app.post("/uploadCompanyLogo/:id", upload.single("logo"), async(req,res) => {
   try{
     if(!req.file){
     return res.status(400).json({message:"No file"});
+  }
+  const existingUser = await User.findById(req.params.id);
+  if (existingUser && existingUser.companyLogo) {
+    await deleteOldImageFromS3(existingUser.companyLogo);
   }
   const logoUrl = req.file.key;
   const user = await User.findByIdAndUpdate(
@@ -859,10 +889,7 @@ app.post("/uploadCompanyLogo/:id", upload.single("logo"), async(req,res)=>{
 
 app.post("/addProduct/:id", upload.single("image"), async (req, res) => {
   try {
-    console.log("BODY:", req.body);
-    console.log("FILE:", req.file);
     const { name, price, type, index } = req.body;
-    // 🔍 Find user
     const user = await User.findById(req.params.id);
     if (!user) {
       return res.status(404).json({ message: "User not found" });
@@ -889,6 +916,9 @@ app.post("/addProduct/:id", upload.single("image"), async (req, res) => {
         user.products[i] = {};
       }
       existingProduct = user.products[i];
+    }
+    if (req.file && existingProduct.image) {
+      await deleteOldImageFromS3(existingProduct.image);
     }
     // 🔥 FINAL PRODUCT (IMPORTANT FIX)
     const updatedProduct = {
@@ -1468,7 +1498,7 @@ app.post("/sendProjectGroupMessage", upload.single("attachment"), async (req, re
     }
     let attachmentData = { filename: "", attachmentSetPath: "uploads/temp" };
     if (req.file) {
-      attachmentData.filename = path.basename(req.file.key);
+      attachmentData.filename = req.file.key;
     }
     const msg = new ProjectGroupMessage({
       senderId,
@@ -1935,8 +1965,14 @@ app.put("/updateLabourUser/:id", upload.fields([
       delete updateFields.password;
     }
     if (req.files) {
-      if (req.files['dp']) updateFields.profilePic = path.basename(req.files['dp'][0].key);
-      if (req.files['idCard']) updateFields.idProof = path.basename(req.files['idCard'][0].key);
+      if (req.files['dp']) {
+        if (labour.profilePic) await deleteOldImageFromS3(labour.profilePic);
+        updateFields.profilePic = req.files['dp'][0].key;
+      }
+      if (req.files['idCard']) {
+        if (labour.idProof) await deleteOldImageFromS3(labour.idProof);
+        updateFields.idProof = req.files['idCard'][0].key;
+      }
     }
     const updated = await User.findByIdAndUpdate(
       req.params.id,
@@ -2118,7 +2154,7 @@ app.post("/createEmployee", upload.single("dp"), async(req,res)=>{
     const sharedMaterialData = (companyOwner && companyOwner.materialData) ? companyOwner.materialData : [];
     let profilePicFilename = "";
     if (req.file) {
-      profilePicFilename = path.basename(req.file.key);
+      profilePicFilename = req.file.key;
     }
     const emp = new User({
       name,
@@ -2164,8 +2200,9 @@ app.get("/getEmployees/:id", async(req,res)=>{
 
 /* ================= 2.3. UPDATE EMPLOYEE ================= */
 
-app.put("/updateOwner/:id", upload.single("dp"), async(req,res)=>{
+app.put("/updateOwner/:id", upload.single("dp"), async(req,res) => {
   try{
+    const existingUser = await User.findById(req.params.id);
     const updateData = {
       name: req.body.name,
       phone: req.body.phone,
@@ -2175,7 +2212,10 @@ app.put("/updateOwner/:id", upload.single("dp"), async(req,res)=>{
       subRole: req.body.subRole
     };
     if(req.file){
-      updateData.profilePic = path.basename(req.file.key);
+      if (existingUser && existingUser.profilePic) {
+        await deleteOldImageFromS3(existingUser.profilePic);
+      }
+      updateData.profilePic = req.file.key;
     }
     const data = await User.findByIdAndUpdate(
       req.params.id,
@@ -2592,13 +2632,18 @@ app.post("/uploadProductionImage", upload.single("image"), async (req, res) => {
     if (!req.file) {
       return res.status(400).json({ msg: "No file uploaded" });
     }
-    const imageUrl = req.file.location || req.file.key;
     const creator = await User.findById(vendorId);
     if (!creator) {
       return res.status(404).json({ msg: "User not found buddy" });
     }
     const mainOwnerId = creator.usedBy || creator._id;
     const prodObjectId = new mongoose.Types.ObjectId(prodId);
+    const mainUserDoc = await User.findById(mainOwnerId) || creator;
+    const targetProd = mainUserDoc.productionData.find(p => p._id.toString() === prodId);
+    if (targetProd && targetProd.images && targetProd.images[imgIndex]) {
+      await deleteOldImageFromS3(targetProd.images[imgIndex]);
+    }
+    const imageUrl = req.file.location || req.file.key;
     const imageKey = `productionData.$[prod].images.${imgIndex}`;
     await User.updateMany(
       {
@@ -2668,6 +2713,12 @@ app.put("/updateMaterial/:matId", async (req, res) => {
     if (!creator) return res.status(404).send("User not found buddy");
     const mainOwnerId = creator.usedBy || creator._id;
     const matObjectId = new mongoose.Types.ObjectId(req.params.matId);
+    if (req.file) {
+      const mainUserDoc = await User.findById(mainOwnerId) || creator;
+      for (let proj of (mainUserDoc.projectData || [])) {
+      }
+      updateFields.image = req.file.key;
+    }
     const setQuery = {};
     for (const key in updateFields) {
       setQuery[`materialData.$[mat].${key}`] = updateFields[key];
@@ -2743,7 +2794,12 @@ app.post("/uploadMaterialImage", upload.single("image"), async (req, res) => {
     }
     const mainOwnerId = creator.usedBy || creator._id;
     const matObjectId = new mongoose.Types.ObjectId(matId);
-    const imageName = path.basename(req.file.key);
+    const mainUserDoc = await User.findById(mainOwnerId) || creator;
+    const targetMat = mainUserDoc.materialData.find(m => m._id.toString() === matId);
+    if (targetMat && targetMat.images && targetMat.images[imgIndex]) {
+      await deleteOldImageFromS3(targetMat.images[imgIndex]);
+    }
+    const imageUrl = req.file.key;
     const imageKey = `materialData.$[mat].images.${imgIndex}`;
     await User.updateMany(
       {
@@ -3165,7 +3221,15 @@ app.get("/getSingleProject/:projectId", async (req, res) => {
 app.put("/updateProject/:projectId", async (req, res) => {
   try {
     const { projectName, propertyDetails, propertyOwners, supportSources, cover } = req.body;
-    
+    if (cover) {
+      const existingUserDoc = await User.findOne({ "projectData._id": req.params.projectId });
+      if (existingUserDoc) {
+        const oldProj = existingUserDoc.projectData.id(req.params.projectId);
+        if (oldProj && oldProj.cover && oldProj.cover !== cover) {
+          await deleteOldImageFromS3(oldProj.cover);
+        }
+      }
+    }
     const user = await User.findOneAndUpdate(
       { "projectData._id": req.params.projectId },
       { 
