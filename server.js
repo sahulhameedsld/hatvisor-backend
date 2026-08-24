@@ -3837,7 +3837,13 @@ app.post("/saveDailyTaskMedia", async (req, res) => {
         console.error("Old media delete from S3 failed buddy:", s3Err);
       }
     }
-    project.taskMedia[viewName] = { url, fileType };
+    const existingComments = project.taskMedia[viewName]?.comments || [];
+    project.taskMedia[viewName] = { 
+      url, 
+      fileType,
+      likedBy: [],
+      comments: existingComments
+    };
     user.markModified('projectData'); 
     await user.save();
     // ================= GLOBAL EMPLOYEES & LINKS SYNC OVERWRITE ================= //
