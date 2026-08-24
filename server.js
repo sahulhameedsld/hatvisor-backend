@@ -2645,6 +2645,7 @@ app.post("/uploadProductionImage", upload.single("image"), async (req, res) => {
     }
     const imageUrl = req.file.location || req.file.key;
     const imageKey = `productionData.$[prod].images.${imgIndex}`;
+    const likesKey = `productionData.$[prod].likedBy`;
     await User.updateMany(
       {
         $or: [
@@ -2654,7 +2655,7 @@ app.post("/uploadProductionImage", upload.single("image"), async (req, res) => {
         "productionData._id": prodObjectId
       },
       {
-        $set: { [imageKey]: imageUrl }
+        $set: { [imageKey]: imageUrl, [likesKey]: [] }
       },
       {
         arrayFilters: [{ "prod._id": prodObjectId }]
