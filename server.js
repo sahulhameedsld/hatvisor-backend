@@ -779,6 +779,21 @@ app.put("/updateUser/:id", async(req,res)=>{
           usedBy: ""
         }
       };
+      if (role === "company") {
+        const existingUser = await User.findById(req.params.id);
+        if (existingUser && (!existingUser.subscription || !existingUser.subscription.trialStart)) {
+          const trialStart = new Date();
+          const trialEnd = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+          updateQuery.$set.subscription = {
+            plan: "trial",
+            payment: false,
+            trialStart: trialStart,
+            trialEnd: trialEnd,
+            subscriptionStart: null,
+            subscriptionEnd: null
+          };
+        }
+      }
     }
     const user = await User.findByIdAndUpdate(
       req.params.id,
