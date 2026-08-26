@@ -3902,35 +3902,89 @@ app.post("/saveDailyTaskMedia", async (req, res) => {
 app.post("/addTaskMediaComment", async (req, res) => {
   try {
     const { vendorId, projectId, viewName, userId, text, userName, userPic, commentId } = req.body;
-    if (!vendorId || !projectId || !viewName) {
+    if (!projectId || !viewName || !userId || !text?.trim()) {
+      return res.status(400).json({
+        message: "Missing required comment fields buddy!"
+      });
+    }
+    let vendorUser = null;
+    let project = null;
+    if (vendorId) {
+      vendorUser = await User.findById(vendorId);
+      if (vendorUser) {
+        project = vendorUser.projectData?.find(
+          p =>
+            p._id &&
+            p._id.toString() === projectId
+        );
+      }
+    }
+    if (!vendorUser || !project) {
+      vendorUser = await User.findOne({
+        projectData: {
+          $elemMatch: {
+            _id: new mongoose.Types.ObjectId(projectId),
+            "propertyOwners._id": userId
+          }
+        }
+      });
+      if (vendorUser) {
+        project = vendorUser.projectData.find(
+          p =>
+            p._id &&
+            p._id.toString() === projectId
+        );
+      }
+    }
+    if (!vendorUser || !project) {
+      return res.status(404).json({
+        message:
+          "Project not found for this user/property owner."
+      });
+    }
+
+      if (!vendorId || !projectId || !viewName) {
       return res.status(400).json({ message: "Missing required fields buddy!" });
     }
-    const user = await User.findById(vendorId);
-    if (!user) return res.status(404).json({ message: "Vendor not found buddy!" });
-    const project = user.projectData.find(p => p._id && p._id.toString() === projectId);
-    if (!project) return res.status(404).json({ message: "Project not found in user database!" });
-    if (!project.taskMedia) project.taskMedia = {};
+    if (!project.taskMedia) {
+      project.taskMedia = {};
+    }
     if (!project.taskMedia[viewName]) {
       project.taskMedia[viewName] = { url: "", fileType: "image", likedBy: [], comments: [] };
     }
     const media = project.taskMedia[viewName];
     if (!media.comments) media.comments = [];
     if (commentId) {
-      const comment = media.comments.find(c => c._id && c._id.toString() === commentId);
-      if (comment) {
-        comment.text = text;
-      } else {
-        return res.status(404).json({ message: "Comment not found to edit!" });
+      const comment = media.comments.find(
+        c => 
+          c._id && 
+          c._id.toString() === commentId &&
+          c.userId &&
+          c.userId.toString() === userId
+      );
+      if (!comment) {
+        return res.status(404).json({
+          message:
+            "Comment not found or you are not the owner."
+        });
       }
+      comment.text = text.trim();
     } else {
-      media.comments.push({ _id: new mongoose.Types.ObjectId(), userId, text, userName, userPic });
+      media.comments.push({
+        _id: new mongoose.Types.ObjectId(),
+        userId: userId,
+        text: text.trim(),
+        userName: userName || "User",
+        userPic: userPic || "",
+        createdAt: new Date()
+      });
     }
-    user.markModified('projectData'); 
-    await user.save();
-    res.json({ taskMedia: project.taskMedia });
+    vendorUser.markModified("projectData");
+    await vendorUser.save();
+    return res.json({ success: true, taskMedia: project.taskMedia });
   } catch (err) {
     console.error("Comment Error:", err);
-    res.status(500).json({ message: "Comment failed buddy!", error: err.message });
+    return res.status(500).json({ message: "Comment failed buddy!", error: err.message });
   }
 });
 
