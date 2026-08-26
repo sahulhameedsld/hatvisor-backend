@@ -3237,17 +3237,29 @@ app.get("/getSingleProject/:projectId", async (req, res) => {
 app.put("/updateProject/:projectId", async (req, res) => {
   try {
     const { projectName, propertyDetails, propertyOwners, supportSources, cover } = req.body;
-    if (cover) {
-      const existingUserDoc = await User.findOne({ "projectData._id": req.params.projectId });
-      if (existingUserDoc) {
-        const oldProj = existingUserDoc.projectData.id(req.params.projectId);
-        if (oldProj && oldProj.cover && oldProj.cover !== cover) {
-          await deleteOldImageFromS3(oldProj.cover);
-        }
-      }
+    const projectId = req.params.projectId;
+    const existingUserDoc = await User.findOne({ "projectData._id": projectId });
+    if (!existingUserDoc) {
+      return res.status(404).json({ msg: "Project not found" });
     }
+    const oldProj = existingUserDoc.projectData.id(projectId);
+    if (cover && oldProj && oldProj.cover && oldProj.cover !== cover) {
+      await deleteOldImageFromS3(oldProj.cover);
+    }
+    const projectSubDoc = {
+      _id: oldProj._id,
+      projectId: oldProj.projectId || oldProj._id,
+      projectName: projectName,
+      cover: cover,
+      propertyDetails: propertyDetails,
+      propertyOwners: propertyOwners || [],
+      supportSources: supportSources || [],
+      taskMedia: oldProj.taskMedia || {},
+      createdDate: oldProj.createdDate || new Date()
+    };
+    
     const user = await User.findOneAndUpdate(
-      { "projectData._id": req.params.projectId },
+      { "projectData._id": projectId },
       { 
         $set: { 
           "projectData.$.projectName": projectName,
@@ -3260,8 +3272,24 @@ app.put("/updateProject/:projectId", async (req, res) => {
       },
       { returnDocument: "after" }
     );
-
-    const updatedProject = user.projectData.id(req.params.projectId);
+    const newOwnerIds = (propertyOwners || []).map(o => o._id.toString());
+    const newSupportIds = (supportSources || []).map(s => s._id.toString());
+    const allAssignedUserIds = [...new Set([...newOwnerIds, ...newSupportIds])];
+    const oldOwnerIds = (oldProj.propertyOwners || []).map(o => o._id.toString());
+    const oldSupportIds = (oldProj.supportSources || []).map(s => s._id.toString());
+    const allOldUserIds = [...new Set([...oldOwnerIds, ...oldSupportIds])];
+    for (let userId of allAssignedUserIds) {
+      await User.findByIdAndUpdate(userId, {
+        $addToSet: { projectData: projectSubDoc }
+      });
+    }
+    const removedUserIds = allOldUserIds.filter(id => !allAssignedUserIds.includes(id));
+    for (let userId of removedUserIds) {
+      await User.findByIdAndUpdate(userId, {
+        $pull: { projectData: { _id: projectId } }
+      });
+    }
+    const updatedProject = user.projectData.id(projectId);
     res.json(updatedProject);
   } catch (err) {
     res.status(500).json({ msg: "Update failed" });
