@@ -3902,11 +3902,19 @@ app.post("/saveDailyTaskMedia", async (req, res) => {
 app.post("/addTaskMediaComment", async (req, res) => {
   try {
     const { vendorId, projectId, viewName, userId, text, userName, userPic, commentId } = req.body;
-    if (!vendorId || !projectId || !viewName) {
+    if (!projectId || !viewName) {
       return res.status(400).json({ message: "Missing required fields buddy!" });
     }
-    const user = await User.findById(vendorId);
-    if (!user) return res.status(404).json({ message: "Vendor not found buddy!" });
+    let user = null;
+    if (vendorId) {
+      user = await User.findById(vendorId);
+    }
+    if (!user) {
+      user = await User.findOne({ "projectData._id": projectId });
+    }
+    if (!user) {
+      return res.status(404).json({ message: "Project owner not found buddy!" });
+    }
     const project = user.projectData.find(p => p._id && p._id.toString() === projectId);
     if (!project) return res.status(404).json({ message: "Project not found in user database!" });
     if (!project.taskMedia) project.taskMedia = {};
