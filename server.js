@@ -5373,10 +5373,10 @@ app.post("/createOrder", async (req, res) => {
     let amount = 0;
     switch (plan) {
       case "6months":
-        amount = 399;
+        amount = 3999;
         break;
       case "yearly":
-        amount = 899;
+        amount = 6999;
         break;
       default:
         return res.status(400).json({
