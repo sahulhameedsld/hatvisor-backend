@@ -97,6 +97,28 @@ const deletePhysicalFile = async (fileName) => {
   }
 };
 
+/* ================= HELPER TO SAFELY DELETE FILE FROM S3 ================= */
+
+const deleteImageFromS3 = async (imageKey) => {
+  if (!imageKey) return;
+  try {
+    let cleanKey = imageKey.includes("amazonaws.com/") 
+      ? imageKey.split("amazonaws.com/")[1] 
+      : imageKey;
+    if (!cleanKey.startsWith("uploads/")) {
+      cleanKey = `uploads/${cleanKey}`;
+    }
+    const command = new DeleteObjectCommand({
+      Bucket: process.env.AWS_BUCKET_NAME,
+      Key: cleanKey,
+    });
+    await s3.send(command);
+    console.log(`Successfully deleted ${cleanKey} from S3 permanently!`);
+  } catch (err) {
+    console.error(`Error deleting ${imageKey} from S3:`, err);
+  }
+};
+
 /* ================= 🔔 CENTRAL NOTIFICATION HELPER ENGINE ================= */
 
 async function triggerNotification({ recipientId, senderId, senderName, senderPic, type, title, message, projectId = "", viewName = "" }) {
@@ -1053,13 +1075,71 @@ app.get("/labourProducts", async (req,res)=>{
 
 /* ================= DELETE ACCOUNT ================= */
 
-app.delete("/deleteUser/:id", async(req,res)=>{
-  try{
-    await User.findByIdAndDelete(req.params.id);
-    res.json({ message:"User deleted" });
-  }catch(err){
-  console.log(err);
-  res.status(500).json({ message:"Delete failed" });
+app.delete("/deleteUser/:id", async (req, res) => {
+  try {
+    const userId = req.params.id;
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: "User not found buddy!" });
+    }
+    if (user.role === "company") {
+      await User.updateMany(
+        { usedBy: userId, role: { $in: ["customer", "labour"] } },
+        { $set: { usedBy: "" } }
+      );
+    }
+    let imagesToDelete = [];
+    if (user.profilePic) imagesToDelete.push(user.profilePic);
+    if (user.companyCover) imagesToDelete.push(user.companyCover);
+    if (user.companyLogo) imagesToDelete.push(user.companyLogo);
+    if (Array.isArray(user.products)) {
+      user.products.forEach(prod => {
+        if (Array.isArray(prod.images)) {
+          imagesToDelete.push(...prod.images);
+        }
+      });
+    }
+    if (Array.isArray(user.productionData)) {
+      user.productionData.forEach(prod => {
+        if (Array.isArray(prod.images)) {
+          imagesToDelete.push(...prod.images);
+        }
+      });
+    }
+    if (Array.isArray(user.materialData)) {
+      user.materialData.forEach(mat => {
+        if (Array.isArray(mat.images)) {
+          imagesToDelete.push(...mat.images);
+        }
+      });
+    }
+    if (Array.isArray(user.projectData)) {
+      user.projectData.forEach(proj => {
+        if (proj.cover) imagesToDelete.push(proj.cover);
+        
+        if (proj.taskMedia && typeof proj.taskMedia === "object") {
+          Object.values(proj.taskMedia).forEach(media => {
+            if (media && media.url) {
+              imagesToDelete.push(media.url);
+            }
+          });
+        }
+        if (Array.isArray(proj.materialStock)) {
+          proj.materialStock.forEach(stock => {
+            if (Array.isArray(stock.images)) {
+              imagesToDelete.push(...stock.images);
+            }
+          });
+        }
+      });
+    }
+    imagesToDelete = [...new Set(imagesToDelete)].filter(img => img && typeof img === "string" && img.trim() !== "");
+    await Promise.all(imagesToDelete.map(imgKey => deleteImageFromS3(imgKey)));
+    await User.findByIdAndDelete(userId);
+    res.json({ message: "User account and associated S3 files deleted successfully!" });
+  } catch (err) {
+    console.log("Delete Account Error:", err);
+    res.status(500).json({ message: "Delete failed due to server error" });
   }
 });
 
