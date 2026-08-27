@@ -1083,11 +1083,73 @@ app.delete("/deleteUser/:id", async (req, res) => {
       return res.status(404).json({ message: "User not found buddy!" });
     }
     if (user.role === "company") {
+      const companyProjectIds = Array.isArray(user.projectData) 
+        ? user.projectData.map(p => p._id) 
+        : [];
+      const companyCustomProjectIds = Array.isArray(user.projectData) 
+        ? user.projectData.map(p => p.projectId).filter(Boolean) 
+        : [];
+      if (companyProjectIds.length > 0 || companyCustomProjectIds.length > 0) {
+        await User.updateMany(
+          {},
+          {
+            $pull: {
+              projectData: {
+                $or: [
+                  { _id: { $in: companyProjectIds } },
+                  { projectId: { $in: companyCustomProjectIds } }
+                ]
+              }
+            }
+          }
+        );
+      }
+      await User.updateMany(
+        {},
+        {
+          $pull: {
+            "projectData.propertyOwners": { _id: userId },
+            "projectData.supportSources": { _id: userId }
+          }
+        }
+      );
       await User.updateMany(
         { usedBy: userId, role: { $in: ["customer", "labour"] } },
-        { $set: { usedBy: "" } }
+        { 
+          $set: { 
+            usedBy: "", 
+            subRole: "", 
+            products: [],
+            projectData: [],
+            productionData: [],
+            materialData: [],
+            casualLeaves: [],
+            generalLeaves: [],
+            sickLeaves: [],
+            weekOff: [],
+            importData: [],
+            supplyData: [],
+            subscription: {
+              orderId: '',
+              payment: false,
+              paymentId: '',
+              plan: '',
+              trialEnd: null,
+              trialStart: null 
+            } 
+          }
+        }
       );
     }
+    await User.updateMany(
+      {},
+      {
+        $pull: {
+          "projectData.propertyOwners": { _id: userId },
+          "projectData.supportSources": { _id: userId }
+        }
+      }
+    );
     let imagesToDelete = [];
     if (user.profilePic) imagesToDelete.push(user.profilePic);
     if (user.companyCover) imagesToDelete.push(user.companyCover);
