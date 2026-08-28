@@ -673,6 +673,18 @@ const UserSchema = new mongoose.Schema({
           return new Date(Date.now()+14*24*60*60*1000);
       }
     },
+    paused: {
+      type: Boolean,
+      default: false
+    },
+    pausedAt: {
+      type: Date,
+      default: null
+    },
+    totalPausedMs: {
+      type: Number,
+      default: 0
+    },
     subscriptionStart:{
       type:Date,
       default:null
@@ -785,37 +797,81 @@ app.post("/login", async(req,res)=>{
 app.put("/updateUser/:id", async(req,res)=>{
   try{
     const { role } = req.body;
-    let updateQuery = { $set: req.body };
+    const existingUser = await User.findById(req.params.id);
+    if (!existingUser) {
+      return res.status(404).json({
+        message: "User profile not found buddy"
+      });
+    }
+    let updateQuery = { $set: {
+        ...req.body
+      } 
+    };
     if (role) {
-      updateQuery = {
-        $set: { 
-          role: role,
-          assignType: "",
-          attendanceStatus: "OUT",
-          overtime: false,
-          actualInTime: "--:--",
-          actualOutTime: "--:--",
-          otStartTime: "--:--",
-          otEndTime: "--:--",
-          currentProjectName: ""
-        },
-        $unset: { 
-          usedBy: ""
-        }
+      updateQuery.$set = {
+        ...req.body,
+        role: role,
+        assignType: "",
+        attendanceStatus: "OUT",
+        overtime: false,
+        actualInTime: "--:--",
+        actualOutTime: "--:--",
+        otStartTime: "--:--",
+        otEndTime: "--:--",
+        currentProjectName: ""
       };
-      if (role === "company") {
-        const existingUser = await User.findById(req.params.id);
-        if (existingUser && (!existingUser.subscription || !existingUser.subscription.trialStart)) {
-          const trialStart = new Date();
-          const trialEnd = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
-          updateQuery.$set.subscription = {
-            plan: "trial",
-            payment: false,
-            trialStart: trialStart,
-            trialEnd: trialEnd,
-            subscriptionStart: null,
-            subscriptionEnd: null
-          };
+      if (
+        existingUser.role === "company" &&
+        role !== "company"
+      ) {
+        const subscription =
+          existingUser.subscription || {};
+        if (
+          subscription.plan === "trial" &&
+          !subscription.payment &&
+          !subscription.paused
+        ) {
+          updateQuery.$set["subscription.paused"] = true;
+          updateQuery.$set["subscription.pausedAt"] = new Date();
+          console.log("Trial paused because user switched away from company");
+        }
+      }
+      if (existingUser.role !== "company" && role === "company") {
+        const subscription = existingUser.subscription || {};
+        if (
+          subscription.plan === "trial" &&
+          !subscription.payment &&
+          subscription.paused &&
+          subscription.pausedAt
+        ) {
+          const now = new Date();
+          const pausedDuration =
+            now.getTime() -
+            new Date(subscription.pausedAt).getTime();
+          const previousPausedMs =
+            Number(subscription.totalPausedMs || 0);
+          const newTotalPausedMs =
+            previousPausedMs + pausedDuration;
+          const oldTrialEnd = subscription.trialEnd
+            ? new Date(subscription.trialEnd)
+            : new Date(
+              new Date(subscription.trialStart).getTime() +
+              14 * 24 * 60 * 60 * 1000
+            );
+          const newTrialEnd = new Date(
+            oldTrialEnd.getTime() +
+            pausedDuration
+          );
+          updateQuery.$set["subscription.paused"] = false;
+          updateQuery.$set["subscription.pausedAt"] = null;
+          updateQuery.$set["subscription.totalPausedMs"] = newTotalPausedMs;
+          updateQuery.$set["subscription.trialEnd"] = newTrialEnd;
+          console.log("Trial resumed successfully",
+            {
+              pausedDuration,
+              newTrialEnd
+            }
+          );
         }
       }
     }
@@ -828,9 +884,12 @@ app.put("/updateUser/:id", async(req,res)=>{
       return res.status(404).json({ message: "User profile not found buddy" });
     }
     res.json(user);
-  }catch(err){
-    console.log(err);
-    res.status(500).json({ message:"Update failed" });
+  } catch (err) {
+    console.error("Update User Error:", err);
+    res.status(500).json({
+      message: "Update failed",
+      error: err.message
+    });
   }
 });
 
@@ -1178,7 +1237,7 @@ app.delete("/deleteUser/:id", async (req, res) => {
         }
       }
     );
-    console.log("Support source references removed:", supportReferenceResult.modifiedCount);
+    console.log("Support source references removed:", supportReferenceResult.modifiedCount);    
     if (user.role === "company") {
       console.log("Company account detected");
       if (Array.isArray(user.projectData)) {
@@ -1190,6 +1249,7 @@ app.delete("/deleteUser/:id", async (req, res) => {
           .filter(Boolean);
         console.log("Company project IDs:", projectIds);
         console.log("Company custom project IDs:", customProjectIds);
+        
         if (projectIds.length > 0) {
           await User.updateMany(
             {},
@@ -1197,8 +1257,8 @@ app.delete("/deleteUser/:id", async (req, res) => {
               $pull: {
                 projectData: {
                   $or: [
-                    { _id: { $in: companyProjectIds } },
-                    { projectId: { $in: companyCustomProjectIds } }
+                    { _id: { $in: projectIds } },
+                    { projectId: { $in: customProjectIds } }
                   ]
                 }
               }
@@ -1220,9 +1280,23 @@ app.delete("/deleteUser/:id", async (req, res) => {
           );
         }
       }
-      const usedByResult = await User.updateMany(
+      const labourUpdateResult = await User.updateMany(
         {
           usedBy: userObjectId,
+          role: "labour"
+        },
+        [
+          {
+            $set: {
+              createdBy: "$usedBy"
+            }
+          }
+        ]
+      );
+      console.log("Labour createdBy updated to usedBy:", labourUpdateResult.modifiedCount);
+      const usedByResult = await User.updateMany(
+        {
+          usedBy: userId,
           role: {
             $in: [
               "customer",
@@ -1256,27 +1330,28 @@ app.delete("/deleteUser/:id", async (req, res) => {
         }
       );
       console.log("Users detached from company:", usedByResult.modifiedCount);
-    }
+    }    
     if (imagesToDelete.length > 0) {
       await Promise.all(
         imagesToDelete.map(
           image => deleteImageFromS3(image)
         )
       );
-    }
+    }    
     const deletedUser = await User.findByIdAndDelete(userId);
     if (!deletedUser) {
       return res.status(404).json({
         success: false,
         message: "User could not be deleted!"
       });
-    }
+    }    
     console.log("USER DELETED SUCCESSFULLY:", userId);
     return res.status(200).json({
       success: true,
-      message:
-        "User account deleted successfully!", deletedUserId: userId, deletedFiles: imagesToDelete.length
-    });
+      message: "User account deleted successfully!", 
+      deletedUserId: userId, 
+      deletedFiles: imagesToDelete.length
+    });    
   } catch (err) {
     return res.status(500).json({
       success: false,
@@ -5523,62 +5598,118 @@ app.get("/checkSubscription/:userId", async (req, res) => {
         message: "User not found"
       });
     }
-    if (user.role === "customer" && user.usedBy) {
-      user = await User.findById(user.usedBy);
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: "Company not found"
-        });
+    if (user.role !== "company" && user.usedBy) {
+      const companyUser = await User.findById(user.usedBy);
+      if (companyUser) {
+        user = companyUser;
       }
     }
-    const today = new Date();
+    if (!user.subscription) {
+      user.subscription = {
+        plan: "trial",
+        payment: false,
+        trialStart: new Date(),
+        trialEnd: new Date(
+          Date.now() + 14 * 24 * 60 * 60 * 1000
+        ),
+        paused: false,
+        pausedAt: null,
+        totalPausedMs: 0,
+        subscriptionStart: null,
+        subscriptionEnd: null,
+        paymentId: "",
+        orderId: ""
+      };
+      await user.save();
+    }
+    const subscription = user.subscription;
+    const now = new Date();
     let locked = false;
     let remainingDays = 0;
-    if (!user.subscription.payment) {
-      remainingDays = Math.ceil(
-        (new Date(user.subscription.trialEnd) - today) /
-        (1000 * 60 * 60 * 24)
-      );
-      if (remainingDays < 0) remainingDays = 0;
-      if (today > new Date(user.subscription.trialEnd)) {
+    if (subscription.payment === true) {
+      if (!subscription.subscriptionEnd) {
         locked = true;
-      }
-    }
-    else {
-      remainingDays = Math.ceil(
-        (new Date(user.subscription.subscriptionEnd) - today) /
-        (1000 * 60 * 60 * 24)
-      );
-      if (remainingDays < 0) remainingDays = 0;
-      if (today > new Date(user.subscription.subscriptionEnd)) {
-        user.subscription.plan = "trial";
-        user.subscription.payment = false;
-        user.subscription.trialStart = new Date();
-        user.subscription.trialEnd = new Date(
-          Date.now() + 14 * 24 * 60 * 60 * 1000
+        remainingDays = 0;
+      } else {
+        remainingDays = Math.ceil(
+          (
+            new Date(subscription.subscriptionEnd).getTime() -
+            now.getTime()
+          ) /
+          (1000 * 60 * 60 * 24)
         );
-        user.subscription.subscriptionStart = null;
-        user.subscription.subscriptionEnd = null;
-        user.day = 1;
-        await user.save();
-        locked = false;
-        remainingDays = 14;
+        if (remainingDays < 0) {
+          remainingDays = 0;
+        }
+        if (
+          now >= new Date(subscription.subscriptionEnd)
+        ) {
+          locked = true;
+          remainingDays = 0;
+          subscription.plan = "expired";
+          await user.save();
+        }
+      }
+    } else {
+      if (subscription.paused === true && subscription.pausedAt) {
+        const pausedAt = new Date(subscription.pausedAt);
+        remainingDays = Math.ceil(
+          (
+            new Date(subscription.trialEnd).getTime() -
+            pausedAt.getTime()
+          ) /
+          (1000 * 60 * 60 * 24)
+        );
+        if (remainingDays < 0) {
+          remainingDays = 0;
+        }
+        locked = remainingDays <= 0;
+      } else {
+        if (!subscription.trialEnd) {
+          subscription.trialStart = now;
+          subscription.trialEnd = new Date(
+            now.getTime() +
+            14 * 24 * 60 * 60 * 1000
+          );
+          await user.save();
+        }
+        remainingDays = Math.ceil(
+          (
+            new Date(subscription.trialEnd).getTime() -
+            now.getTime()
+          ) /
+          (1000 * 60 * 60 * 24)
+        );
+        if (remainingDays < 0) {
+          remainingDays = 0;
+        }
+        if (
+          now >= new Date(subscription.trialEnd)
+        ) {
+          locked = true;
+          remainingDays = 0;
+          subscription.plan = "expired";
+          await user.save();
+        }
       }
     }
     res.json({
       success: true,
       locked,
-      payment: user.subscription.payment,
-      plan: user.subscription.plan,
+      payment: subscription.payment,
+      plan: subscription.plan,
       remainingDays,
-      subscription: user.subscription,
-      day: user.day || 1,
+      subscription,
+      paused: subscription.paused || false,
+      trialStart: subscription.trialStart,
+      trialEnd: subscription.trialEnd,
+      totalPausedMs: subscription.totalPausedMs || 0,
+      subscriptionStart: subscription.subscriptionStart,
+      subscriptionEnd: subscription.subscriptionEnd,
       companyId: user._id
     });
-  }
-  catch (err) {
-    console.log(err);
+  } catch (err) {
+    console.error("Check Subscription Error:", err);
     res.status(500).json({
       success: false,
       message: err.message
