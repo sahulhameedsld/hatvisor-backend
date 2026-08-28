@@ -1082,6 +1082,12 @@ app.delete("/deleteUser/:id", async (req, res) => {
     if (!user) {
       return res.status(404).json({ message: "User not found buddy!" });
     }
+    let objectIdUserId;
+    try {
+      objectIdUserId = new mongoose.Types.ObjectId(userId);
+    } catch (e) {
+      objectIdUserId = userId;
+    }
     if (user.role === "company") {
       const companyProjectIds = Array.isArray(user.projectData) 
         ? user.projectData.map(p => p._id) 
@@ -1108,13 +1114,19 @@ app.delete("/deleteUser/:id", async (req, res) => {
         {},
         {
           $pull: {
-            "projectData.propertyOwners": { _id: userId },
-            "projectData.supportSources": { _id: userId }
+            "projectData.propertyOwners": { $or: [{ _id: userId }, { _id: objectIdUserId }] },
+            "projectData.supportSources": { $or: [{ _id: userId }, { _id: objectIdUserId }] }
           }
         }
       );
       await User.updateMany(
-        { usedBy: userId, role: { $in: ["customer", "labour"] } },
+        { 
+          $or: [
+            { usedBy: userId }, 
+            { usedBy: objectIdUserId }
+          ], 
+          role: { $in: ["customer", "labour"] } 
+        },
         { 
           $set: { 
             usedBy: "", 
@@ -1145,8 +1157,8 @@ app.delete("/deleteUser/:id", async (req, res) => {
       {},
       {
         $pull: {
-          "projectData.propertyOwners": { _id: userId },
-          "projectData.supportSources": { _id: userId }
+          "projectData.propertyOwners": { $or: [{ _id: userId }, { _id: objectIdUserId }] },
+          "projectData.supportSources": { $or: [{ _id: userId }, { _id: objectIdUserId }] }
         }
       }
     );
@@ -1197,7 +1209,7 @@ app.delete("/deleteUser/:id", async (req, res) => {
     }
     imagesToDelete = [...new Set(imagesToDelete)].filter(img => img && typeof img === "string" && img.trim() !== "");
     await Promise.all(imagesToDelete.map(imgKey => deleteImageFromS3(imgKey)));
-    await User.findByIdAndDelete(userId);
+    await User.findByIdAndDelete(userId); 
     res.json({ message: "User account and associated S3 files deleted successfully!" });
   } catch (err) {
     console.log("Delete Account Error:", err);
