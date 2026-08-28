@@ -1214,12 +1214,12 @@ app.delete("/deleteUser/:id", async (req, res) => {
     const userObjectId = new mongoose.Types.ObjectId(userId);
     const projectReferenceResult = await User.updateMany(
       {
-        "projectData.propertyOwners._id": userObjectId
+        "projectData.propertyOwners._id": { $in: [userId, userObjectId] }
       },
       {
         $pull: {
           "projectData.$[].propertyOwners": {
-            _id: userId
+            _id: { $in: [userId, userObjectId] }
           }
         }
       }
@@ -1227,12 +1227,12 @@ app.delete("/deleteUser/:id", async (req, res) => {
     console.log("Property owner references removed:", projectReferenceResult.modifiedCount);
     const supportReferenceResult = await User.updateMany(
       {
-        "projectData.supportSources._id": userObjectId
+        "projectData.supportSources._id": { $in: [userId, userObjectId] }
       },
       {
         $pull: {
           "projectData.$[].supportSources": {
-            _id: userId
+            _id: { $in: [userId, userObjectId] }
           }
         }
       }
