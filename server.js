@@ -102,22 +102,22 @@ const deletePhysicalFile = async (fileName) => {
 const deleteImageFromS3 = async (imageKey) => {
   if (!imageKey || typeof imageKey !== "string") return;
   try {
-    let cleanKey = imageKey.includes("amazonaws.com/") 
-      ? imageKey.split("amazonaws.com/")[1] 
-      : imageKey;    
-    cleanKey = cleanKey.trim();
-    if (!cleanKey) return;
+    let cleanKey = imageKey.trim();
+    if (cleanKey.includes("amazonaws.com/")) {
+      cleanKey = cleanKey.split("amazonaws.com/")[1];
+    }
+    cleanKey = cleanKey.replace(/^\/+/, "");
     if (!cleanKey.startsWith("uploads/")) {
       cleanKey = `uploads/${cleanKey}`;
-    }   
+    }
     const command = new DeleteObjectCommand({
       Bucket: process.env.AWS_BUCKET_NAME,
       Key: cleanKey,
     });
     await s3.send(command);
-    console.log(`Successfully deleted ${cleanKey} from S3 permanently!`);
+    console.log("S3 deleted:", cleanKey);
   } catch (err) {
-    console.error(`Error deleting ${imageKey} from S3:`, err?.message || err);
+    console.error("S3 delete failed:", imageKey, err.message);
   }
 };
 
@@ -1080,49 +1080,155 @@ app.get("/labourProducts", async (req,res)=>{
 app.delete("/deleteUser/:id", async (req, res) => {
   try {
     const userId = req.params.id;
-    const user = await User.findById(userId);    
+    const user = await User.findById(userId);
     if (!user) {
-      return res.status(404).json({ message: "User not found buddy!" });
+      return res.status(404).json({ success: false, message: "User not found buddy!" });
     }
-    if (user.role === "company") {
-      const companyProjectIds = Array.isArray(user.projectData) 
-        ? user.projectData.map(p => p._id) 
-        : [];
-      const companyCustomProjectIds = Array.isArray(user.projectData) 
-        ? user.projectData.map(p => p.projectId).filter(Boolean) 
-        : [];
-
-      if (companyProjectIds.length > 0 || companyCustomProjectIds.length > 0) {
-        await User.updateMany(
-          {},
-          {
-            $pull: {
-              projectData: {
-                $or: [
-                  { _id: { $in: companyProjectIds } },
-                  { projectId: { $in: companyCustomProjectIds } }
-                ]
-              }
+    let imagesToDelete = [];
+    if (user.profilePic) {
+      imagesToDelete.push(user.profilePic);
+    }
+    if (user.companyLogo) {
+      imagesToDelete.push(user.companyLogo);
+    }
+    if (user.companyCover) {
+      imagesToDelete.push(user.companyCover);
+    }
+    if (Array.isArray(user.products)) {
+      user.products.forEach(product => {
+        if (Array.isArray(product.images)) {
+          imagesToDelete.push(...product.images);
+        }
+        if (product.image) {
+          imagesToDelete.push(product.image);
+        }
+      });
+    }
+    if (Array.isArray(user.productionData)) {
+      user.productionData.forEach(production => {
+        if (Array.isArray(production.images)) {
+          imagesToDelete.push(...production.images);
+        }
+      });
+    }
+    if (Array.isArray(user.materialData)) {
+      user.materialData.forEach(material => {
+        if (Array.isArray(material.images)) {
+          imagesToDelete.push(...material.images);
+        }
+      });
+    }
+    if (Array.isArray(user.projectData)) {
+      user.projectData.forEach(project => {
+        if (project.cover) {
+          imagesToDelete.push(project.cover);
+        }
+        if (
+          project.taskMedia &&
+          typeof project.taskMedia === "object"
+        ) {
+          Object.values(project.taskMedia).forEach(media => {
+            if (media && media.url) {
+              imagesToDelete.push(media.url);
             }
-          }
-        );
-      }
-      await User.updateMany(
-        {},
-        {
-          $pull: {
-            "projectData.propertyOwners": { $or: [{ _id: userId }, { _id: userId.toString() }] },
-            "projectData.supportSources": { $or: [{ _id: userId }, { _id: userId.toString() }] }
+          });
+        }
+        if (Array.isArray(project.materialStock)) {
+          project.materialStock.forEach(stock => {
+            if (Array.isArray(stock.images)) {
+              imagesToDelete.push(...stock.images);
+            }
+          });
+        }
+      });
+    }
+    imagesToDelete = [
+      ...new Set(
+        imagesToDelete.filter(
+          img =>
+            typeof img === "string" &&
+            img.trim() !== ""
+        )
+      )
+    ];
+    console.log("Files to delete from S3:", imagesToDelete.length);
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const projectReferenceResult = await User.updateMany(
+      {
+        "projectData.propertyOwners._id": userObjectId
+      },
+      {
+        $pull: {
+          "projectData.$[].propertyOwners": {
+            _id: userId
           }
         }
-      );
-      await User.updateMany(
-        { 
-          $or: [
-            { usedBy: userId }, 
-            { usedBy: userId.toString() }
-          ], 
-          role: { $in: ["customer", "labour"] } 
+      }
+    );
+    console.log("Property owner references removed:", projectReferenceResult.modifiedCount);
+    const supportReferenceResult = await User.updateMany(
+      {
+        "projectData.supportSources._id": userObjectId
+      },
+      {
+        $pull: {
+          "projectData.$[].supportSources": {
+            _id: userId
+          }
+        }
+      }
+    );
+    console.log("Support source references removed:", supportReferenceResult.modifiedCount);
+    if (user.role === "company") {
+      console.log("Company account detected");
+      if (Array.isArray(user.projectData)) {
+        const projectIds = user.projectData
+          .map(project => project?._id)
+          .filter(Boolean);
+        const customProjectIds = user.projectData
+          .map(project => project?.projectId)
+          .filter(Boolean);
+        console.log("Company project IDs:", projectIds);
+        console.log("Company custom project IDs:", customProjectIds);
+        if (projectIds.length > 0) {
+          await User.updateMany(
+            {},
+            {
+              $pull: {
+                projectData: {
+                  $or: [
+                    { _id: { $in: companyProjectIds } },
+                    { projectId: { $in: companyCustomProjectIds } }
+                  ]
+                }
+              }
+            }
+          );
+        }
+        if (customProjectIds.length > 0) {
+          await User.updateMany(
+            {},
+            {
+              $pull: {
+                projectData: {
+                  projectId: {
+                    $in: customProjectIds
+                  }
+                }
+              }
+            }
+          );
+        }
+      }
+      const usedByResult = await User.updateMany(
+        {
+          usedBy: userObjectId,
+          role: {
+            $in: [
+              "customer",
+              "labour"
+            ]
+          }
         },
         { 
           $set: { 
@@ -1149,67 +1255,34 @@ app.delete("/deleteUser/:id", async (req, res) => {
           }
         }
       );
+      console.log("Users detached from company:", usedByResult.modifiedCount);
     }
-    await User.updateMany(
-      {},
-      {
-        $pull: {
-          "projectData.propertyOwners": { $or: [{ _id: userId }, { _id: userId.toString() }] },
-          "projectData.supportSources": { $or: [{ _id: userId }, { _id: userId.toString() }] }
-        }
-      }
-    );
-    let imagesToDelete = [];
-    if (user.profilePic) imagesToDelete.push(user.profilePic);
-    if (user.companyCover) imagesToDelete.push(user.companyCover);
-    if (user.companyLogo) imagesToDelete.push(user.companyLogo);
-    if (Array.isArray(user.products)) {
-      user.products.forEach(prod => {
-        if (Array.isArray(prod.images)) {
-          imagesToDelete.push(...prod.images);
-        }
+    if (imagesToDelete.length > 0) {
+      await Promise.all(
+        imagesToDelete.map(
+          image => deleteImageFromS3(image)
+        )
+      );
+    }
+    const deletedUser = await User.findByIdAndDelete(userId);
+    if (!deletedUser) {
+      return res.status(404).json({
+        success: false,
+        message: "User could not be deleted!"
       });
     }
-    if (Array.isArray(user.productionData)) {
-      user.productionData.forEach(prod => {
-        if (Array.isArray(prod.images)) {
-          imagesToDelete.push(...prod.images);
-        }
-      });
-    }
-    if (Array.isArray(user.materialData)) {
-      user.materialData.forEach(mat => {
-        if (Array.isArray(mat.images)) {
-          imagesToDelete.push(...mat.images);
-        }
-      });
-    }
-    if (Array.isArray(user.projectData)) {
-      user.projectData.forEach(proj => {
-        if (proj.cover) imagesToDelete.push(proj.cover);
-        if (proj.taskMedia && typeof proj.taskMedia === "object") {
-          Object.values(proj.taskMedia).forEach(media => {
-            if (media && media.url) {
-              imagesToDelete.push(media.url);
-            }
-          });
-        }
-        if (Array.isArray(proj.materialStock)) {
-          proj.materialStock.forEach(stock => {
-            if (Array.isArray(stock.images)) {
-              imagesToDelete.push(...stock.images);
-            }
-          });
-        }
-      });
-    }
-    imagesToDelete = [...new Set(imagesToDelete)].filter(img => img && typeof img === "string" && img.trim() !== "");
-    await Promise.allSettled(imagesToDelete.map(imgKey => deleteImageFromS3(imgKey)));
-    await User.findByIdAndDelete(userId); 
-    res.json({ message: "User account and associated S3 files deleted successfully!" });
+    console.log("USER DELETED SUCCESSFULLY:", userId);
+    return res.status(200).json({
+      success: true,
+      message:
+        "User account deleted successfully!", deletedUserId: userId, deletedFiles: imagesToDelete.length
+    });
   } catch (err) {
-    console.log("Delete Account Error (Detailed):", err);
-    res.status(500).json({ message: "Delete failed due to server error", error: err.message });
+    return res.status(500).json({
+      success: false,
+      message: "Delete failed due to server error",
+      error: err.message
+    });
   }
 });
 
