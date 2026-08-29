@@ -1211,30 +1211,18 @@ app.delete("/deleteUser/:id", async (req, res) => {
       )
     ];
     console.log("Files to delete from S3:", imagesToDelete.length);
+    
     const userObjectId = new mongoose.Types.ObjectId(userId);
+    const userIdString = userId.toString();
+
+    // 1. CLEANUP PROPERTY OWNERS FROM OTHER USERS' PROJECTS (Both ObjectId & String formats handle panrom)
     try {
-      const propertyOwnerResult = await User.collection.updateMany(
-        {
-          "projectData.propertyOwners": {
-            $elemMatch: {
-              _id: {
-                $in: [
-                  userObjectId,
-                  userId
-                ]
-              }
-            }
-          }
-        },
+      const propertyOwnerResult = await User.updateMany(
+        { "projectData.propertyOwners._id": { $in: [userObjectId, userIdString] } },
         {
           $pull: {
             "projectData.$[].propertyOwners": {
-              _id: {
-                $in: [
-                  userObjectId,
-                  userId
-                ]
-              }
+              _id: { $in: [userObjectId, userIdString] }
             }
           }
         }
@@ -1243,29 +1231,15 @@ app.delete("/deleteUser/:id", async (req, res) => {
     } catch (err) {
       console.error("Property owner cleanup error:", err);
     }
+
+    // 2. CLEANUP SUPPORT SOURCES FROM OTHER USERS' PROJECTS
     try {
-      const supportSourceResult = await User.collection.updateMany(
-        {
-          "projectData.supportSources": {
-            $elemMatch: {
-              _id: {
-                $in: [
-                  userObjectId,
-                  userId
-                ]
-              }
-            }
-          }
-        },
+      const supportSourceResult = await User.updateMany(
+        { "projectData.supportSources._id": { $in: [userObjectId, userIdString] } },
         {
           $pull: {
             "projectData.$[].supportSources": {
-              _id: {
-                $in: [
-                  userObjectId,
-                  userId
-                ]
-              }
+              _id: { $in: [userObjectId, userIdString] }
             }
           }
         }
@@ -1274,6 +1248,7 @@ app.delete("/deleteUser/:id", async (req, res) => {
     } catch (err) {
       console.error("Support source cleanup error:", err);
     }
+
     if (user.role === "company") {
       console.log("Company account detected");
       if (Array.isArray(user.projectData)) {
@@ -1286,7 +1261,7 @@ app.delete("/deleteUser/:id", async (req, res) => {
         console.log("Company project IDs:", projectIds);
         console.log("Company custom project IDs:", customProjectIds);
         
-        if (projectIds.length > 0) {
+        if (projectIds.length > 0 || customProjectIds.length > 0) {
           await User.updateMany(
             {},
             {
@@ -1301,21 +1276,8 @@ app.delete("/deleteUser/:id", async (req, res) => {
             }
           );
         }
-        if (customProjectIds.length > 0) {
-          await User.updateMany(
-            {},
-            {
-              $pull: {
-                projectData: {
-                  projectId: {
-                    $in: customProjectIds
-                  }
-                }
-              }
-            }
-          );
-        }
       }
+      
       const labourUpdateResult = await User.updateMany(
         {
           usedBy: userObjectId,
@@ -1330,9 +1292,10 @@ app.delete("/deleteUser/:id", async (req, res) => {
         ]
       );
       console.log("Labour createdBy updated to usedBy:", labourUpdateResult.modifiedCount);
+      
       const usedByResult = await User.updateMany(
         {
-          usedBy: userId,
+          $or: [{ usedBy: userObjectId }, { usedBy: userIdString }],
           role: {
             $in: [
               "customer",
@@ -1369,6 +1332,7 @@ app.delete("/deleteUser/:id", async (req, res) => {
       );
       console.log("Users detached from company:", usedByResult.modifiedCount);
     }    
+
     if (imagesToDelete.length > 0) {
       await Promise.all(
         imagesToDelete.map(
@@ -1376,6 +1340,7 @@ app.delete("/deleteUser/:id", async (req, res) => {
         )
       );
     }    
+
     const deletedUser = await User.findByIdAndDelete(userId);
     if (!deletedUser) {
       return res.status(404).json({
@@ -1383,6 +1348,7 @@ app.delete("/deleteUser/:id", async (req, res) => {
         message: "User could not be deleted!"
       });
     }    
+
     console.log("USER DELETED SUCCESSFULLY:", userId);
     return res.status(200).json({
       success: true,
@@ -1390,7 +1356,9 @@ app.delete("/deleteUser/:id", async (req, res) => {
       deletedUserId: userId, 
       deletedFiles: imagesToDelete.length
     });    
+
   } catch (err) {
+    console.log("Delete Account Error:", err);
     return res.status(500).json({
       success: false,
       message: "Delete failed due to server error",
