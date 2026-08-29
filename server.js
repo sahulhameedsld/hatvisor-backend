@@ -1136,12 +1136,10 @@ app.get("/labourProducts", async (req,res)=>{
 
 /* ================= DELETE ACCOUNT ================= */
 
-app.precisionDelete = // (or your normal route definition)
 app.delete("/deleteUser/:id", async (req, res) => {
   try {
     const userId = req.params.id;
 
-    // 1. First, validate the MongoDB ID before querying the database
     if (!mongoose.Types.ObjectId.isValid(userId)) {
       return res.status(400).json({
         success: false,
@@ -1202,7 +1200,7 @@ app.delete("/deleteUser/:id", async (req, res) => {
 
     const userObjectId = new mongoose.Types.ObjectId(userId);
 
-    // 2. Reference cleanup in other users' projectData
+    // Safe reference cleanup with $ifNull checks to avoid empty array crashes
     const referenceCleanupResult = await User.updateMany(
       {},
       [
@@ -1220,14 +1218,24 @@ app.delete("/deleteUser/:id", async (req, res) => {
                         $filter: {
                           input: { $ifNull: ["$$project.propertyOwners", []] },
                           as: "owner",
-                          cond: { $ne: [{ $toString: "$$owner._id" }, userId] }
+                          cond: {
+                            $ne: [
+                              { $toString: { $ifNull: ["$$owner._id", "$$owner"] } },
+                              userId
+                            ]
+                          }
                         }
                       },
                       supportSources: {
                         $filter: {
                           input: { $ifNull: ["$$project.supportSources", []] },
                           as: "support",
-                          cond: { $ne: [{ $toString: "$$support._id" }, userId] }
+                          cond: {
+                            $ne: [
+                              { $toString: { $ifNull: ["$$support._id", "$$support"] } },
+                              userId
+                            ]
+                          }
                         }
                       }
                     }
@@ -1243,7 +1251,7 @@ app.delete("/deleteUser/:id", async (req, res) => {
 
     if (user.role === "company") {
       console.log("Company account detected");
-      if (Array.isArray(user.projectData)) {
+      if (Array.isArray(user.projectData) && user.projectData.length > 0) {
         const projectIds = user.projectData.map(project => project?._id).filter(Boolean);
         const customProjectIds = user.projectData.map(project => project?.projectId).filter(Boolean);
 
@@ -1300,14 +1308,13 @@ app.delete("/deleteUser/:id", async (req, res) => {
       console.log("Users detached from company:", usedByResult.modifiedCount);
     }   
 
-    // 3. Safe S3 Deletion (Wrapped so it won't crash entire block if S3 fails)
     if (imagesToDelete.length > 0) {
       try {
         await Promise.all(
           imagesToDelete.map(image => deleteImageFromS3(image))
         );
       } catch (s3Err) {
-        console.error("S3 Deletion error (proceeding with user deletion):", s3Err.message);
+        console.error("S3 Deletion error:", s3Err.message);
       }
     }   
 
@@ -1328,7 +1335,7 @@ app.delete("/deleteUser/:id", async (req, res) => {
     });   
 
   } catch (err) {
-    console.error("Delete user error stack:", err); // Added detailed log
+    console.error("Delete user error stack:", err);
     return res.status(500).json({
       success: false,
       message: "Delete failed due to server error",
