@@ -1212,33 +1212,68 @@ app.delete("/deleteUser/:id", async (req, res) => {
     ];
     console.log("Files to delete from S3:", imagesToDelete.length);
     const userObjectId = new mongoose.Types.ObjectId(userId);
-    const idVariants = [userId, userObjectId];
-    const projectReferenceResult = await User.updateMany(
-      {
-        "projectData.propertyOwners._id": { $in: idVariants }
-      },
-      {
-        $pull: {
-          "projectData.$[].propertyOwners": {
-            _id: { $in: idVariants }
+    try {
+      const propertyOwnerResult = await User.collection.updateMany(
+        {
+          "projectData.propertyOwners": {
+            $elemMatch: {
+              _id: {
+                $in: [
+                  userObjectId,
+                  userId
+                ]
+              }
+            }
+          }
+        },
+        {
+          $pull: {
+            "projectData.$[].propertyOwners": {
+              _id: {
+                $in: [
+                  userObjectId,
+                  userId
+                ]
+              }
+            }
           }
         }
-      }
-    );
-    console.log("Property owner references removed:", projectReferenceResult.modifiedCount);
-    const supportReferenceResult = await User.updateMany(
-      {
-        "projectData.supportSources._id": { $in: idVariants }
-      },
-      {
-        $pull: {
-          "projectData.$[].supportSources": {
-            _id: { $in: idVariants }
+      );
+      console.log("Property owner references removed:", propertyOwnerResult.modifiedCount);
+    } catch (err) {
+      console.error("Property owner cleanup error:", err);
+    }
+    try {
+      const supportSourceResult = await User.collection.updateMany(
+        {
+          "projectData.supportSources": {
+            $elemMatch: {
+              _id: {
+                $in: [
+                  userObjectId,
+                  userId
+                ]
+              }
+            }
+          }
+        },
+        {
+          $pull: {
+            "projectData.$[].supportSources": {
+              _id: {
+                $in: [
+                  userObjectId,
+                  userId
+                ]
+              }
+            }
           }
         }
-      }
-    );
-    console.log("Support source references removed:", supportReferenceResult.modifiedCount);    
+      );
+      console.log("Support source references removed:", supportSourceResult.modifiedCount);
+    } catch (err) {
+      console.error("Support source cleanup error:", err);
+    }
     if (user.role === "company") {
       console.log("Company account detected");
       if (Array.isArray(user.projectData)) {
@@ -1297,7 +1332,7 @@ app.delete("/deleteUser/:id", async (req, res) => {
       console.log("Labour createdBy updated to usedBy:", labourUpdateResult.modifiedCount);
       const usedByResult = await User.updateMany(
         {
-          usedBy: { $in: idVariants },
+          usedBy: userId,
           role: {
             $in: [
               "customer",
