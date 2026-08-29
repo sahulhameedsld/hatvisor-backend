@@ -1139,10 +1139,19 @@ app.get("/labourProducts", async (req,res)=>{
 app.delete("/deleteUser/:id", async (req, res) => {
   try {
     const userId = req.params.id;
+    
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid user ID!"
+      });
+    }
+
     const user = await User.findById(userId);
     if (!user) {
       return res.status(404).json({ success: false, message: "User not found buddy!" });
     }
+
     let imagesToDelete = [];
     if (user.profilePic) {
       imagesToDelete.push(user.profilePic);
@@ -1201,6 +1210,7 @@ app.delete("/deleteUser/:id", async (req, res) => {
         }
       });
     }
+
     imagesToDelete = [
       ...new Set(
         imagesToDelete.filter(
@@ -1211,13 +1221,10 @@ app.delete("/deleteUser/:id", async (req, res) => {
       )
     ];
     console.log("Files to delete from S3:", imagesToDelete.length);
-    if (!mongoose.Types.ObjectId.isValid(userId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid user ID!"
-      });
-    }
+
     const userObjectId = new mongoose.Types.ObjectId(userId);
+
+    // 1. Remove propertyOwners & supportSources references across all users' projects
     const referenceCleanupResult = await User.updateMany(
       {},
       [
@@ -1280,12 +1287,12 @@ app.delete("/deleteUser/:id", async (req, res) => {
         }
       ]
     );
-    console.log(
-      "Project reference cleanup completed:",
-      referenceCleanupResult.modifiedCount
-    );
+    console.log("Project reference cleanup completed:", referenceCleanupResult.modifiedCount);
+
+    // 2. If role is company, perform cleanups and detach employees/labours
     if (user.role === "company") {
       console.log("Company account detected");
+      
       if (Array.isArray(user.projectData)) {
         const projectIds = user.projectData
           .map(project => project?._id)
@@ -1293,10 +1300,11 @@ app.delete("/deleteUser/:id", async (req, res) => {
         const customProjectIds = user.projectData
           .map(project => project?.projectId)
           .filter(Boolean);
+        
         console.log("Company project IDs:", projectIds);
         console.log("Company custom project IDs:", customProjectIds);
         
-        if (projectIds.length > 0) {
+        if (projectIds.length > 0 || customProjectIds.length > 0) {
           await User.updateMany(
             {},
             {
@@ -1311,21 +1319,27 @@ app.delete("/deleteUser/:id", async (req, res) => {
             }
           );
         }
-        if (customProjectIds.length > 0) {
-          await User.updateMany(
-            {},
-            {
-              $pull: {
-                projectData: {
-                  projectId: {
-                    $in: customProjectIds
-                  }
-                }
-              }
-            }
-          );
-        }
       }
+
+      // Labour specific update logic based on your description:
+      // If createdBy and usedBy are both the vendorId, replace createdBy with labour's own _id and clear usedBy.
+      await User.updateMany(
+        {
+          usedBy: userObjectId,
+          role: "labour",
+          createdBy: userObjectId
+        },
+        [
+          {
+            $set: {
+              createdBy: "$_id",
+              usedBy: ""
+            }
+          }
+        ]
+      );
+
+      // For labours where only createdBy or usedBy matches, or general detachment
       const labourUpdateResult = await User.updateMany(
         {
           usedBy: userObjectId,
@@ -1334,12 +1348,21 @@ app.delete("/deleteUser/:id", async (req, res) => {
         [
           {
             $set: {
-              createdBy: "$usedBy"
+              createdBy: {
+                $cond: {
+                  if: { $eq: ["$createdBy", userObjectId] },
+                  then: "$_id",
+                  else: "$createdBy"
+                }
+              },
+              usedBy: ""
             }
           }
         ]
       );
-      console.log("Labour createdBy updated to usedBy:", labourUpdateResult.modifiedCount);
+      console.log("Labour records updated:", labourUpdateResult.modifiedCount);
+
+      // Detach and reset employee/customer fields
       const usedByResult = await User.updateMany(
         {
           usedBy: userId,
@@ -1379,6 +1402,8 @@ app.delete("/deleteUser/:id", async (req, res) => {
       );
       console.log("Users detached from company:", usedByResult.modifiedCount);
     }    
+
+    // 3. Delete images from S3 bucket
     if (imagesToDelete.length > 0) {
       await Promise.all(
         imagesToDelete.map(
@@ -1386,6 +1411,8 @@ app.delete("/deleteUser/:id", async (req, res) => {
         )
       );
     }    
+
+    // 4. Finally delete the user account
     const deletedUser = await User.findByIdAndDelete(userId);
     if (!deletedUser) {
       return res.status(404).json({
@@ -1393,6 +1420,7 @@ app.delete("/deleteUser/:id", async (req, res) => {
         message: "User could not be deleted!"
       });
     }    
+
     console.log("USER DELETED SUCCESSFULLY:", userId);
     return res.status(200).json({
       success: true,
@@ -1400,7 +1428,9 @@ app.delete("/deleteUser/:id", async (req, res) => {
       deletedUserId: userId, 
       deletedFiles: imagesToDelete.length
     });    
+
   } catch (err) {
+    console.error("Delete Error:", err);
     return res.status(500).json({
       success: false,
       message: "Delete failed due to server error",
