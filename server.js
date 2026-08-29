@@ -1245,7 +1245,8 @@ app.delete("/deleteUser/:id", async (req, res) => {
             }
           }
         }
-      ]
+      ],
+      { updatePipeline: true }
     );
     console.log("Project reference cleanup completed:", referenceCleanupResult.modifiedCount);
 
