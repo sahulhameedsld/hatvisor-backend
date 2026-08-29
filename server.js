@@ -1211,15 +1211,16 @@ app.delete("/deleteUser/:id", async (req, res) => {
       )
     ];
     console.log("Files to delete from S3:", imagesToDelete.length);
-    const userObjectId = new mongoose.Types.ObjectId(userId);
-    const referenceUpdateResult = await User.updateMany(
+    const referenceCleanupResult = await User.updateMany(
       {},
       [
         {
           $set: {
             projectData: {
               $map: {
-                input: { $ifNull: ["$projectData", []] },
+                input: {
+                  $ifNull: ["$projectData", []]
+                },
                 as: "project",
                 in: {
                   $mergeObjects: [
@@ -1228,12 +1229,17 @@ app.delete("/deleteUser/:id", async (req, res) => {
                       propertyOwners: {
                         $filter: {
                           input: {
-                            $ifNull: ["$$project.propertyOwners", []]
+                            $ifNull: [
+                              "$$project.propertyOwners",
+                              []
+                            ]
                           },
                           as: "owner",
                           cond: {
                             $ne: [
-                              { $toString: "$$owner._id" },
+                              {
+                                $toString: "$$owner._id"
+                              },
                               userId
                             ]
                           }
@@ -1242,12 +1248,17 @@ app.delete("/deleteUser/:id", async (req, res) => {
                       supportSources: {
                         $filter: {
                           input: {
-                            $ifNull: ["$$project.supportSources", []]
+                            $ifNull: [
+                              "$$project.supportSources",
+                              []
+                            ]
                           },
                           as: "support",
                           cond: {
                             $ne: [
-                              { $toString: "$$support._id" },
+                              {
+                                $toString: "$$support._id"
+                              },
                               userId
                             ]
                           }
@@ -1263,9 +1274,9 @@ app.delete("/deleteUser/:id", async (req, res) => {
       ]
     );
     console.log(
-      "Reference cleanup modified:",
-      referenceUpdateResult.modifiedCount
-    );    
+      "Project reference cleanup completed:",
+      referenceCleanupResult.modifiedCount
+    );
     if (user.role === "company") {
       console.log("Company account detected");
       if (Array.isArray(user.projectData)) {
