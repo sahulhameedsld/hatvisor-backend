@@ -1212,14 +1212,15 @@ app.delete("/deleteUser/:id", async (req, res) => {
     ];
     console.log("Files to delete from S3:", imagesToDelete.length);
     const userObjectId = new mongoose.Types.ObjectId(userId);
+    const idVariants = [userId, userObjectId];
     const projectReferenceResult = await User.updateMany(
       {
-        "projectData.propertyOwners._id": { $in: [userId, userObjectId] }
+        "projectData.propertyOwners._id": { $in: idVariants }
       },
       {
         $pull: {
           "projectData.$[].propertyOwners": {
-            _id: { $in: [userId, userObjectId] }
+            _id: { $in: idVariants }
           }
         }
       }
@@ -1227,12 +1228,12 @@ app.delete("/deleteUser/:id", async (req, res) => {
     console.log("Property owner references removed:", projectReferenceResult.modifiedCount);
     const supportReferenceResult = await User.updateMany(
       {
-        "projectData.supportSources._id": { $in: [userId, userObjectId] }
+        "projectData.supportSources._id": { $in: idVariants }
       },
       {
         $pull: {
           "projectData.$[].supportSources": {
-            _id: { $in: [userId, userObjectId] }
+            _id: { $in: idVariants }
           }
         }
       }
@@ -1296,7 +1297,7 @@ app.delete("/deleteUser/:id", async (req, res) => {
       console.log("Labour createdBy updated to usedBy:", labourUpdateResult.modifiedCount);
       const usedByResult = await User.updateMany(
         {
-          usedBy: userId,
+          usedBy: { $in: idVariants },
           role: {
             $in: [
               "customer",
@@ -1307,7 +1308,6 @@ app.delete("/deleteUser/:id", async (req, res) => {
         { 
           $set: { 
             usedBy: "", 
-            subRole: "", 
             products: [],
             projectData: [],
             productionData: [],
@@ -1326,6 +1326,9 @@ app.delete("/deleteUser/:id", async (req, res) => {
               trialEnd: null,
               trialStart: null 
             } 
+          },
+          $unset: {
+            subRole: ""
           }
         }
       );
