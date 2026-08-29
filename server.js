@@ -1139,76 +1139,93 @@ app.get("/labourProducts", async (req,res)=>{
 app.delete("/deleteUser/:id", async (req, res) => {
   try {
     const userId = req.params.id;
-
     if (!mongoose.Types.ObjectId.isValid(userId)) {
       return res.status(400).json({
         success: false,
         message: "Invalid user ID format!"
       });
     }
-
-    const user = await User.findById(userId);
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const user = await User.findById(userObjectId);
     if (!user) {
-      return res.status(404).json({ success: false, message: "User not found buddy!" });
+      return res.status(404).json({
+        success: false,
+        message: "User not found buddy!"
+      });
     }
-
+    /* ---------- Collect S3 Images ---------- */
     let imagesToDelete = [];
     if (user.profilePic) imagesToDelete.push(user.profilePic);
     if (user.companyLogo) imagesToDelete.push(user.companyLogo);
     if (user.companyCover) imagesToDelete.push(user.companyCover);
-
     if (Array.isArray(user.products)) {
       user.products.forEach(product => {
-        if (Array.isArray(product.images)) imagesToDelete.push(...product.images);
-        if (product.image) imagesToDelete.push(product.image);
+        if (Array.isArray(product.images)) {
+          imagesToDelete.push(...product.images);
+        }
+        if (product.image) {
+          imagesToDelete.push(product.image);
+        }
       });
     }
     if (Array.isArray(user.productionData)) {
       user.productionData.forEach(production => {
-        if (Array.isArray(production.images)) imagesToDelete.push(...production.images);
+        if (Array.isArray(production.images)) {
+          imagesToDelete.push(...production.images);
+        }
       });
     }
     if (Array.isArray(user.materialData)) {
       user.materialData.forEach(material => {
-        if (Array.isArray(material.images)) imagesToDelete.push(...material.images);
+        if (Array.isArray(material.images)) {
+          imagesToDelete.push(...material.images);
+        }
       });
     }
     if (Array.isArray(user.projectData)) {
       user.projectData.forEach(project => {
-        if (project.cover) imagesToDelete.push(project.cover);
-        if (project.taskMedia && typeof project.taskMedia === "object") {
+        if (project.cover) {
+          imagesToDelete.push(project.cover);
+        }
+        if (
+          project.taskMedia &&
+          typeof project.taskMedia === "object"
+        ) {
           Object.values(project.taskMedia).forEach(media => {
-            if (media && media.url) imagesToDelete.push(media.url);
+            if (media?.url) {
+              imagesToDelete.push(media.url);
+            }
           });
         }
         if (Array.isArray(project.materialStock)) {
           project.materialStock.forEach(stock => {
-            if (Array.isArray(stock.images)) imagesToDelete.push(...stock.images);
+            if (Array.isArray(stock.images)) {
+              imagesToDelete.push(...stock.images);
+            }
           });
         }
       });
     }
-
     imagesToDelete = [
       ...new Set(
         imagesToDelete.filter(
-          img => typeof img === "string" && img.trim() !== ""
+          img =>
+            typeof img === "string" &&
+            img.trim() !== ""
         )
       )
     ];
-    console.log("Files to delete from S3:", imagesToDelete.length);
-
-    const userObjectId = new mongoose.Types.ObjectId(userId);
-
-    // Safe reference cleanup with $ifNull checks to avoid empty array crashes
-    const referenceCleanupResult = await User.updateMany(
+    /* ---------- Remove User References ---------- */
+    await User.updateMany(
       {},
       [
         {
           $set: {
             projectData: {
               $map: {
-                input: { $ifNull: ["$projectData", []] },
+                input: {
+                  $ifNull: ["$projectData", []]
+                },
                 as: "project",
                 in: {
                   $mergeObjects: [
@@ -1216,11 +1233,23 @@ app.delete("/deleteUser/:id", async (req, res) => {
                     {
                       propertyOwners: {
                         $filter: {
-                          input: { $ifNull: ["$$project.propertyOwners", []] },
+                          input: {
+                            $ifNull: [
+                              "$$project.propertyOwners",
+                              []
+                            ]
+                          },
                           as: "owner",
                           cond: {
                             $ne: [
-                              { $toString: { $ifNull: ["$$owner._id", "$$owner"] } },
+                              {
+                                $toString: {
+                                  $ifNull: [
+                                    "$$owner._id",
+                                    "$$owner"
+                                  ]
+                                }
+                              },
                               userId
                             ]
                           }
@@ -1228,11 +1257,23 @@ app.delete("/deleteUser/:id", async (req, res) => {
                       },
                       supportSources: {
                         $filter: {
-                          input: { $ifNull: ["$$project.supportSources", []] },
+                          input: {
+                            $ifNull: [
+                              "$$project.supportSources",
+                              []
+                            ]
+                          },
                           as: "support",
                           cond: {
                             $ne: [
-                              { $toString: { $ifNull: ["$$support._id", "$$support"] } },
+                              {
+                                $toString: {
+                                  $ifNull: [
+                                    "$$support._id",
+                                    "$$support"
+                                  ]
+                                }
+                              },
                               userId
                             ]
                           }
@@ -1246,44 +1287,74 @@ app.delete("/deleteUser/:id", async (req, res) => {
           }
         }
       ],
-      { updatePipeline: true }
+      {
+        updatePipeline: true
+      }
     );
-    console.log("Project reference cleanup completed:", referenceCleanupResult.modifiedCount);
-
+    /* ---------- Company Cleanup ---------- */
     if (user.role === "company") {
-      console.log("Company account detected");
-      if (Array.isArray(user.projectData) && user.projectData.length > 0) {
-        const projectIds = user.projectData.map(project => project?._id).filter(Boolean);
-        const customProjectIds = user.projectData.map(project => project?.projectId).filter(Boolean);
-
-        if (projectIds.length > 0 || customProjectIds.length > 0) {
+      if (
+        Array.isArray(user.projectData) &&
+        user.projectData.length > 0
+      ) {
+        const projectIds = user.projectData
+          .map(project => project?._id)
+          .filter(Boolean);
+        const customProjectIds = user.projectData
+          .map(project => project?.projectId)
+          .filter(Boolean);
+        const conditions = [];
+        if (projectIds.length > 0) {
+          conditions.push({
+            _id: { $in: projectIds }
+          });
+        }
+        if (customProjectIds.length > 0) {
+          conditions.push({
+            projectId: { $in: customProjectIds }
+          });
+        }
+        if (conditions.length > 0) {
           await User.updateMany(
             {},
             {
               $pull: {
                 projectData: {
-                  $or: [
-                    { _id: { $in: projectIds } },
-                    { projectId: { $in: customProjectIds } }
-                  ]
+                  $or: conditions
                 }
               }
             }
           );
         }
       }
-
-      const labourUpdateResult = await User.updateMany(
-        { usedBy: userObjectId, role: "labour" },
-        [{ $set: { createdBy: "$usedBy" } }]
+      /* Labour createdBy */
+      await User.updateMany(
+        {
+          usedBy: userObjectId,
+          role: "labour"
+        },
+        [
+          {
+            $set: {
+              createdBy: "$usedBy"
+            }
+          }
+        ],
+        {
+          updatePipeline: true
+        }
       );
-      console.log("Labour createdBy updated to usedBy:", labourUpdateResult.modifiedCount);
-
-      const usedByResult = await User.updateMany(
-        { usedBy: userId, role: { $in: ["customer", "labour"] } },
-        { 
-          $set: { 
-            usedBy: "", 
+      /* Detach Company Users */
+      await User.updateMany(
+        {
+          usedBy: userObjectId,
+          role: {
+            $in: ["customer", "labour"]
+          }
+        },
+        {
+          $set: {
+            usedBy: "",
             products: [],
             projectData: [],
             productionData: [],
@@ -1295,48 +1366,45 @@ app.delete("/deleteUser/:id", async (req, res) => {
             importData: [],
             supplyData: [],
             subscription: {
-              orderId: '',
+              orderId: "",
               payment: false,
-              paymentId: '',
-              plan: '',
+              paymentId: "",
+              plan: "",
               trialEnd: null,
-              trialStart: null 
-            } 
+              trialStart: null
+            }
           },
-          $unset: { subRole: "" }
+          $unset: {
+            subRole: ""
+          }
         }
       );
-      console.log("Users detached from company:", usedByResult.modifiedCount);
-    }   
-
+    }
+    /* ---------- Delete S3 Files ---------- */
     if (imagesToDelete.length > 0) {
-      try {
-        await Promise.all(
-          imagesToDelete.map(image => deleteImageFromS3(image))
-        );
-      } catch (s3Err) {
-        console.error("S3 Deletion error:", s3Err.message);
-      }
-    }   
-
-    const deletedUser = await User.findByIdAndDelete(userId);
+      await Promise.allSettled(
+        imagesToDelete.map(image =>
+          deleteImageFromS3(image)
+        )
+      );
+    }
+    /* ---------- Delete User ---------- */
+    const deletedUser =
+      await User.findByIdAndDelete(userObjectId);
     if (!deletedUser) {
       return res.status(404).json({
         success: false,
         message: "User could not be deleted!"
       });
-    }   
-
-    console.log("USER DELETED SUCCESSFULLY:", userId);
+    }
     return res.status(200).json({
       success: true,
-      message: "User account deleted successfully!", 
-      deletedUserId: userId, 
+      message: "User account deleted successfully!",
+      deletedUserId: userId,
       deletedFiles: imagesToDelete.length
-    });   
-
+    });
   } catch (err) {
-    console.error("Delete user error stack:", err);
+    console.error("Delete user error:", err);
     return res.status(500).json({
       success: false,
       message: "Delete failed due to server error",
