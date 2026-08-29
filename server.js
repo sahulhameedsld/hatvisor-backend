@@ -1143,6 +1143,7 @@ app.delete("/deleteUser/:id", async (req, res) => {
     if (!user) {
       return res.status(404).json({ success: false, message: "User not found buddy!" });
     }
+
     let imagesToDelete = [];
     if (user.profilePic) {
       imagesToDelete.push(user.profilePic);
@@ -1201,6 +1202,7 @@ app.delete("/deleteUser/:id", async (req, res) => {
         }
       });
     }
+
     imagesToDelete = [
       ...new Set(
         imagesToDelete.filter(
@@ -1211,43 +1213,39 @@ app.delete("/deleteUser/:id", async (req, res) => {
       )
     ];
     console.log("Files to delete from S3:", imagesToDelete.length);
-    
+
     const userObjectId = new mongoose.Types.ObjectId(userId);
-    const userIdString = userId.toString();
 
-    // 1. CLEANUP PROPERTY OWNERS FROM OTHER USERS' PROJECTS (Both ObjectId & String formats handle panrom)
-    try {
-      const propertyOwnerResult = await User.updateMany(
-        { "projectData.propertyOwners._id": { $in: [userObjectId, userIdString] } },
-        {
-          $pull: {
-            "projectData.$[].propertyOwners": {
-              _id: { $in: [userObjectId, userIdString] }
-            }
+    // FIX: String and ObjectId dono-vum handle panra madhiri propertyOwners & supportSources pull panrom
+    const searchIds = [userId, userObjectId];
+
+    const projectReferenceResult = await User.updateMany(
+      {
+        "projectData.propertyOwners._id": { $in: searchIds }
+      },
+      {
+        $pull: {
+          "projectData.$[].propertyOwners": {
+            _id: { $in: searchIds }
           }
         }
-      );
-      console.log("Property owner references removed:", propertyOwnerResult.modifiedCount);
-    } catch (err) {
-      console.error("Property owner cleanup error:", err);
-    }
+      }
+    );
+    console.log("Property owner references removed:", projectReferenceResult.modifiedCount);
 
-    // 2. CLEANUP SUPPORT SOURCES FROM OTHER USERS' PROJECTS
-    try {
-      const supportSourceResult = await User.updateMany(
-        { "projectData.supportSources._id": { $in: [userObjectId, userIdString] } },
-        {
-          $pull: {
-            "projectData.$[].supportSources": {
-              _id: { $in: [userObjectId, userIdString] }
-            }
+    const supportReferenceResult = await User.updateMany(
+      {
+        "projectData.supportSources._id": { $in: searchIds }
+      },
+      {
+        $pull: {
+          "projectData.$[].supportSources": {
+            _id: { $in: searchIds }
           }
         }
-      );
-      console.log("Support source references removed:", supportSourceResult.modifiedCount);
-    } catch (err) {
-      console.error("Support source cleanup error:", err);
-    }
+      }
+    );
+    console.log("Support source references removed:", supportReferenceResult.modifiedCount);    
 
     if (user.role === "company") {
       console.log("Company account detected");
@@ -1258,9 +1256,11 @@ app.delete("/deleteUser/:id", async (req, res) => {
         const customProjectIds = user.projectData
           .map(project => project?.projectId)
           .filter(Boolean);
+        
         console.log("Company project IDs:", projectIds);
         console.log("Company custom project IDs:", customProjectIds);
         
+        // FIX: companyProjectIds-ku badhila correct variable `projectIds` use panrom
         if (projectIds.length > 0 || customProjectIds.length > 0) {
           await User.updateMany(
             {},
@@ -1268,8 +1268,8 @@ app.delete("/deleteUser/:id", async (req, res) => {
               $pull: {
                 projectData: {
                   $or: [
-                    { _id: { $in: projectIds } },
-                    { projectId: { $in: customProjectIds } }
+                    ...(projectIds.length > 0 ? [{ _id: { $in: projectIds } }] : []),
+                    ...(customProjectIds.length > 0 ? [{ projectId: { $in: customProjectIds } }] : [])
                   ]
                 }
               }
@@ -1277,7 +1277,7 @@ app.delete("/deleteUser/:id", async (req, res) => {
           );
         }
       }
-      
+
       const labourUpdateResult = await User.updateMany(
         {
           usedBy: userObjectId,
@@ -1292,10 +1292,10 @@ app.delete("/deleteUser/:id", async (req, res) => {
         ]
       );
       console.log("Labour createdBy updated to usedBy:", labourUpdateResult.modifiedCount);
-      
+
       const usedByResult = await User.updateMany(
         {
-          $or: [{ usedBy: userObjectId }, { usedBy: userIdString }],
+          usedBy: userId,
           role: {
             $in: [
               "customer",
