@@ -586,6 +586,7 @@ const UserSchema = new mongoose.Schema({
       likeCount: { type: Number, default: 0 },
       isPublic: { type: Boolean, default: false },
       feedDescription: { type: String, default: "" },
+      tags: { type: [String], default: [] },
       postedAt: { type: Date, default: null },
       createdAt: { type: Date, default: Date.now }
     }
