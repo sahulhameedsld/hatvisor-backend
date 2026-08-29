@@ -3311,6 +3311,7 @@ app.post("/toggleEnterprisePost/:vendorId/:projectId", async (req, res) => {
     user.projectData[projectIndex].isPublic = nextStatus;
     user.projectData[projectIndex].postedAt = nextStatus ? new Date() : null;
     user.projectData[projectIndex].feedDescription = nextStatus ? (feedDescription || "") : "";
+    user.projectData[projectIndex].tags = nextStatus ? (Array.isArray(tags) ? tags : []) : [];
     user.markModified("projectData");
     await user.save();
     res.json({ 
