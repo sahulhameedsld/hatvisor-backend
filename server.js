@@ -1211,6 +1211,13 @@ app.delete("/deleteUser/:id", async (req, res) => {
       )
     ];
     console.log("Files to delete from S3:", imagesToDelete.length);
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid user ID!"
+      });
+    }
+    const userObjectId = new mongoose.Types.ObjectId(userId);
     const referenceCleanupResult = await User.updateMany(
       {},
       [
