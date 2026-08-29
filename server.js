@@ -1143,7 +1143,6 @@ app.delete("/deleteUser/:id", async (req, res) => {
     if (!user) {
       return res.status(404).json({ success: false, message: "User not found buddy!" });
     }
-
     let imagesToDelete = [];
     if (user.profilePic) {
       imagesToDelete.push(user.profilePic);
@@ -1202,7 +1201,6 @@ app.delete("/deleteUser/:id", async (req, res) => {
         }
       });
     }
-
     imagesToDelete = [
       ...new Set(
         imagesToDelete.filter(
@@ -1213,40 +1211,61 @@ app.delete("/deleteUser/:id", async (req, res) => {
       )
     ];
     console.log("Files to delete from S3:", imagesToDelete.length);
-
     const userObjectId = new mongoose.Types.ObjectId(userId);
-
-    // FIX: String and ObjectId dono-vum handle panra madhiri propertyOwners & supportSources pull panrom
-    const searchIds = [userId, userObjectId];
-
-    const projectReferenceResult = await User.updateMany(
-      {
-        "projectData.propertyOwners._id": { $in: searchIds }
-      },
-      {
-        $pull: {
-          "projectData.$[].propertyOwners": {
-            _id: { $in: searchIds }
+    const referenceUpdateResult = await User.updateMany(
+      {},
+      [
+        {
+          $set: {
+            projectData: {
+              $map: {
+                input: { $ifNull: ["$projectData", []] },
+                as: "project",
+                in: {
+                  $mergeObjects: [
+                    "$$project",
+                    {
+                      propertyOwners: {
+                        $filter: {
+                          input: {
+                            $ifNull: ["$$project.propertyOwners", []]
+                          },
+                          as: "owner",
+                          cond: {
+                            $ne: [
+                              { $toString: "$$owner._id" },
+                              userId
+                            ]
+                          }
+                        }
+                      },
+                      supportSources: {
+                        $filter: {
+                          input: {
+                            $ifNull: ["$$project.supportSources", []]
+                          },
+                          as: "support",
+                          cond: {
+                            $ne: [
+                              { $toString: "$$support._id" },
+                              userId
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
           }
         }
-      }
+      ]
     );
-    console.log("Property owner references removed:", projectReferenceResult.modifiedCount);
-
-    const supportReferenceResult = await User.updateMany(
-      {
-        "projectData.supportSources._id": { $in: searchIds }
-      },
-      {
-        $pull: {
-          "projectData.$[].supportSources": {
-            _id: { $in: searchIds }
-          }
-        }
-      }
-    );
-    console.log("Support source references removed:", supportReferenceResult.modifiedCount);    
-
+    console.log(
+      "Reference cleanup modified:",
+      referenceUpdateResult.modifiedCount
+    );    
     if (user.role === "company") {
       console.log("Company account detected");
       if (Array.isArray(user.projectData)) {
@@ -1256,28 +1275,39 @@ app.delete("/deleteUser/:id", async (req, res) => {
         const customProjectIds = user.projectData
           .map(project => project?.projectId)
           .filter(Boolean);
-        
         console.log("Company project IDs:", projectIds);
         console.log("Company custom project IDs:", customProjectIds);
         
-        // FIX: companyProjectIds-ku badhila correct variable `projectIds` use panrom
-        if (projectIds.length > 0 || customProjectIds.length > 0) {
+        if (projectIds.length > 0) {
           await User.updateMany(
             {},
             {
               $pull: {
                 projectData: {
                   $or: [
-                    ...(projectIds.length > 0 ? [{ _id: { $in: projectIds } }] : []),
-                    ...(customProjectIds.length > 0 ? [{ projectId: { $in: customProjectIds } }] : [])
+                    { _id: { $in: projectIds } },
+                    { projectId: { $in: customProjectIds } }
                   ]
                 }
               }
             }
           );
         }
+        if (customProjectIds.length > 0) {
+          await User.updateMany(
+            {},
+            {
+              $pull: {
+                projectData: {
+                  projectId: {
+                    $in: customProjectIds
+                  }
+                }
+              }
+            }
+          );
+        }
       }
-
       const labourUpdateResult = await User.updateMany(
         {
           usedBy: userObjectId,
@@ -1292,7 +1322,6 @@ app.delete("/deleteUser/:id", async (req, res) => {
         ]
       );
       console.log("Labour createdBy updated to usedBy:", labourUpdateResult.modifiedCount);
-
       const usedByResult = await User.updateMany(
         {
           usedBy: userId,
@@ -1332,7 +1361,6 @@ app.delete("/deleteUser/:id", async (req, res) => {
       );
       console.log("Users detached from company:", usedByResult.modifiedCount);
     }    
-
     if (imagesToDelete.length > 0) {
       await Promise.all(
         imagesToDelete.map(
@@ -1340,7 +1368,6 @@ app.delete("/deleteUser/:id", async (req, res) => {
         )
       );
     }    
-
     const deletedUser = await User.findByIdAndDelete(userId);
     if (!deletedUser) {
       return res.status(404).json({
@@ -1348,7 +1375,6 @@ app.delete("/deleteUser/:id", async (req, res) => {
         message: "User could not be deleted!"
       });
     }    
-
     console.log("USER DELETED SUCCESSFULLY:", userId);
     return res.status(200).json({
       success: true,
@@ -1356,9 +1382,7 @@ app.delete("/deleteUser/:id", async (req, res) => {
       deletedUserId: userId, 
       deletedFiles: imagesToDelete.length
     });    
-
   } catch (err) {
-    console.log("Delete Account Error:", err);
     return res.status(500).json({
       success: false,
       message: "Delete failed due to server error",
