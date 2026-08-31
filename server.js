@@ -5820,30 +5820,144 @@ app.post("/createOrder", async (req, res) => {
 
 app.put("/updateDashboardSettings/:userId", async (req, res) => {
   try {
-    const owner = await User.findById(req.params.userId);
+    const userId = req.params.userId;
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid user ID"
+      });
+    }
+    const owner = await User.findById(userId);
     if (!owner) {
-      return res.status(404).json({ success: false, message: "User not found" });
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
     }
     if (owner.role !== "company") {
-      return res.status(403).json({ success: false, message: "Only Company Owner can update dashboard settings." });
+      return res.status(403).json({
+        success: false,
+        message: "Only Company Owner can update dashboard settings."
+      });
     }
-    // 1. Update Company Owner's main dashboard settings
-    owner.dashboardSettings = req.body;
+    const currentSettings = owner.dashboardSettings || {};
+    owner.dashboardSettings = {
+      company: {
+        headerBackground:
+          req.body.company?.headerBackground ||
+          currentSettings.company?.headerBackground ||
+          "#2D435C",
+        headerFontColor:
+          req.body.company?.headerFontColor ||
+          currentSettings.company?.headerFontColor ||
+          "#FFFFFF"
+      },
+      project: {
+        headerBackground:
+          req.body.project?.headerBackground ||
+          currentSettings.project?.headerBackground ||
+          "#2D435C",
+        headerFontColor:
+          req.body.project?.headerFontColor ||
+          currentSettings.project?.headerFontColor ||
+          "#FFFFFF"
+      },
+      modules: {
+        employees:
+          req.body.modules?.employees ??
+          currentSettings.modules?.employees ??
+          true,
+        production:
+          req.body.modules?.production ??
+          currentSettings.modules?.production ??
+          true
+      }
+    };
     await owner.save();
-    // 2. Automatically update all employees whose `usedBy` matches this Company Owner's ID
-    await User.updateMany(
-      { usedBy: owner._id },
-      { $set: { dashboardSettings: req.body } }
-    );
-    // 3. 🔥 Automatically update projects inside `projectData` for this owner & all employees!
-    await User.updateMany(
-      { $or: [{ _id: owner._id }, { usedBy: owner._id }] },
-      { $set: { "dashboardSettings.project": req.body.project } }
-    );
-    res.json(owner);
+    res.json({
+      success: true,
+      user: owner
+    });
   } catch (err) {
     console.error("Dashboard update error:", err);
-    res.status(500).json({ success: false, message: "Dashboard settings update failed." });
+    res.status(500).json({
+      success: false,
+      message: "Dashboard settings update failed."
+    });
+  }
+});
+
+/* ================= 8.2.GET DASHBOARD SETTINGS ================= */
+
+app.get("/getDashboardSettings/:userId", async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid user ID"
+      });
+    }
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+    // Company Owner
+    let owner = user;
+    // Employee / Customer
+    if (user.role !== "company") {
+      if (!user.usedBy) {
+        return res.status(404).json({
+          success: false,
+          message: "Company owner not found"
+        });
+      }
+      owner = await User.findById(user.usedBy);
+      if (!owner || owner.role !== "company") {
+        return res.status(404).json({
+          success: false,
+          message: "Company owner not found"
+        });
+      }
+    }
+    const settings = {
+      company: {
+        headerBackground:
+          owner.dashboardSettings?.company?.headerBackground ||
+          "#2D435C",
+        headerFontColor:
+          owner.dashboardSettings?.company?.headerFontColor ||
+          "#FFFFFF"
+      },
+      project: {
+        headerBackground:
+          owner.dashboardSettings?.project?.headerBackground ||
+          "#2D435C",
+        headerFontColor:
+          owner.dashboardSettings?.project?.headerFontColor ||
+          "#FFFFFF"
+      },
+      modules: {
+        employees:
+          owner.dashboardSettings?.modules?.employees ?? true,
+        production:
+          owner.dashboardSettings?.modules?.production ?? true
+      }
+    };
+    res.json({
+      success: true,
+      ownerId: owner._id,
+      dashboardSettings: settings
+    });
+  } catch (err) {
+    console.error("Get dashboard settings error:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to get dashboard settings."
+    });
   }
 });
 
