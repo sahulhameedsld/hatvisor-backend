@@ -1995,75 +1995,240 @@ app.put("/deleteProjectGroupMessage/:messageId", async (req, res) => {
 app.post('/api/forget-password/verify', async (req, res) => {
   const { phone } = req.body;
   try {
-    const user = await User.findOne({ phone }).populate('createdBy');
-    if (!user) {
-        return res.status(404).json({ success: false, message: "User with this phone number not found!" });
+    if (!phone || !phone.trim()) {
+      return res.status(400).json({ success: false, message: "Phone number is required." });
     }
-
+    const user = await User.findOne({ phone: phone.trim() });
+    if (!user) {
+      return res.status(404).json({success: false, message: "User with this phone number not found!"});
+    }
     let targetEmail = "";
     let targetCompanyName = "";
     let targetCompanyLogo = "";
-    let isSelfRegistered = !user.createdBy;
-
-    if (isSelfRegistered) {
-      targetEmail = user.email; 
-      targetCompanyName = user.companyName || "Hatvisor Enterprise";
-      targetCompanyLogo = user.profilePic || "";
-    } else {
-        targetEmail = user.createdBy.email;
-        targetCompanyName = user.createdBy.companyName || "Hatvisor Enterprise";
-        targetCompanyLogo = user.createdBy.profilePic || "";
+    let targetPhone = "";
+    let recoveryTargetRole = "";
+    let recoveryType = "";
+    if (user.role === "customer") {
+      targetEmail = user.email || "";
+      targetCompanyName = user.companyName || "Hatvisor";
+      targetCompanyLogo = user.companyLogo || user.profilePic || "";
+      targetPhone = user.phone || "";
+      recoveryTargetRole = "customer";
+      recoveryType = "self";
+      if (!targetEmail) {
+        return res.status(400).json({
+          success: false,
+          message: "Customer email address is missing."
+        });
+      }
     }
-    if (!targetEmail) {
-      return res.status(400).json({ 
-          success: false, 
-          message: isSelfRegistered ? "User profile email address missing!" : "Vendor email reference missing!" 
+    else if (user.role === "company") {
+      targetEmail = user.email || "";
+      targetCompanyName = user.companyName || "Hatvisor Enterprise";
+      targetCompanyLogo = user.companyLogo || user.profilePic || "";
+      targetPhone = user.phone || "";
+      recoveryTargetRole = "company";
+      recoveryType = "self";
+      if (!targetEmail) {
+        return res.status(400).json({success: false, message: "Company email address is missing."});
+      }
+    }
+    else if (user.role === "labour") {
+      let vendor = null;
+      const hasCreatedBy = user.createdBy && String(user.createdBy).trim() !== "";
+      const hasUsedBy = user.usedBy && String(user.usedBy).trim() !== "";
+      if (hasUsedBy) {
+        vendor = await User.findOne({
+          _id: user.usedBy,
+          role: "company"
+        });
+        if (vendor) {
+          if ( !hasCreatedBy || String(user.createdBy) !== String(vendor._id) ) {
+            user.createdBy = vendor._id;
+            await user.save();
+            console.log(`🔄 Labour [${user._id}] createdBy repaired → ${vendor._id}`);
+          }
+          targetEmail = vendor.email || "";
+          targetCompanyName = vendor.companyName || "Hatvisor Enterprise";
+          targetCompanyLogo = vendor.companyLogo || vendor.profilePic || "";
+          targetPhone = vendor.phone || "";
+          recoveryTargetRole = "company";
+          recoveryType = "current_vendor";
+        }
+        else if (hasCreatedBy) {
+          vendor = await User.findOne({
+            _id: user.createdBy,
+            role: "company"
+          });
+          if (vendor) {
+            targetEmail = vendor.email || "";
+            targetCompanyName = vendor.companyName || "Hatvisor Enterprise";
+            targetCompanyLogo = vendor.companyLogo || vendor.profilePic || "";
+            targetPhone = vendor.phone || "";
+            recoveryTargetRole = "company";
+            recoveryType = "created_vendor";
+          }
+        }
+      }
+      else if (hasCreatedBy) {
+        vendor = await User.findOne({
+          _id: user.createdBy,
+          role: "company"
+        });
+        if (vendor) {
+          targetEmail = vendor.email || "";
+          targetCompanyName = vendor.companyName || "Hatvisor Enterprise";
+          targetCompanyLogo = vendor.companyLogo || vendor.profilePic || "";
+          targetPhone = vendor.phone || "";
+          recoveryTargetRole = "company";
+          recoveryType = "created_vendor";
+        } else {
+          targetEmail = user.email || "";
+          targetCompanyName = user.companyName || "Hatvisor";
+          targetCompanyLogo = user.companyLogo || user.profilePic || "";
+          targetPhone = user.phone || "";
+          recoveryTargetRole = "labour";
+          recoveryType = "self";
+        }
+      } else {
+        targetEmail = user.email || "";
+        targetCompanyName = user.companyName || "Hatvisor";
+        targetCompanyLogo = user.companyLogo || user.profilePic || "";
+        targetPhone = user.phone || "";
+        recoveryTargetRole = "labour";
+        recoveryType = "self";
+      }
+      if (!targetEmail) {
+        return res.status(400).json({
+          success: false,
+          message:
+            recoveryTargetRole === "labour"
+              ? "Labour email address is missing."
+              : "Vendor email address is missing."
+        });
+      }
+    } else {
+      return res.status(403).json({
+        success: false,
+        message:
+          "Password recovery is not available for this account type."
       });
     }
-    const generatedOTP = Math.floor(100000 + Math.random() * 900000).toString();
+    const generatedOTP = Math.floor(
+      100000 + Math.random() * 900000
+    ).toString();
     user.resetOTP = generatedOTP;
     user.resetOTPExpires = Date.now() + 5 * 60 * 1000;
     await user.save();
-    console.log(`🔑 Generated OTP [${generatedOTP}] for User [${user.name}] sending to [${targetEmail}]`);
+    console.log( `🔑 OTP [${generatedOTP}]` );
+    console.log( `👤 Reset Account: ${user.name || user.phone}` );
+    console.log( `👤 Role: ${user.role}` );
+    console.log( `🎯 Recovery Type: ${recoveryType}` );
+    console.log( `📧 OTP Target: ${targetEmail}` );
     const mailOptions = {
       from: '"Hatvisor Security" <seo@asi.acousticalsurfaces.in>',
       to: targetEmail,
       subject: 'Password Recovery OTP Request',
       html: `
-          <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #ddd; border-radius: 8px; max-width: 500px;">
-              <h2 style="color: #075e54; text-align: center;">Hatvisor OTP Service</h2>
-              <p>Hello,</p>
-              <p>An OTP has been requested to recover the password of account <strong>${user.name}</strong> (Phone: ${user.phone}).</p>
-              ${!isSelfRegistered ? `<p style="font-size: 13px; color: #555;">This is an employee account registered under your organization platform metrics.</p>` : ''}
-              <div style="background: #f4f4f4; padding: 15px; text-align: center; border-radius: 6px; font-size: 24px; font-weight: bold; letter-spacing: 4px; color: #075e54; margin: 20px 0;">
-                  ${generatedOTP}
-              </div>
-              <p style="font-size: 11px; color: #777;">This code is confidential and will expire in 5 minutes. If you did not initiate this, please ignore this email.</p>
+        <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #ddd; border-radius: 8px; max-width: 500px; ">
+          <h2 style="color: #2D435C; text-align: center;">Hatvisor OTP Service</h2>
+          <p>Hello,</p>
+          <p>
+            An OTP has been requested to recover the password
+            of account
+            <strong>
+              ${user.name || "User"}
+            </strong>
+            (Phone:
+            ${user.phone || ""}
+            ).
+          </p>
+          ${
+            user.role === "labour" &&
+            recoveryTargetRole === "company"
+              ? `
+                <p style="
+                  font-size: 13px;
+                  color: #555;
+                ">
+                  This labour account is currently associated
+                  with your company.
+                </p>
+              `
+              : ""
+          }
+          <div style="
+            background: #f4f4f4;
+            padding: 15px;
+            text-align: center;
+            border-radius: 6px;
+            font-size: 24px;
+            font-weight: bold;
+            letter-spacing: 4px;
+            color: #075e54;
+            margin: 20px 0;
+          ">
+            ${generatedOTP}
           </div>
+          <p style="
+            font-size: 11px;
+            color: #777;
+          ">
+            This code is confidential and will expire
+            in 5 minutes.
+          </p>
+        </div>
       `
     };
     try {
-      const info = await transporter.sendMail(mailOptions);
-      console.log("📨 Mail dispatch success. MessageId: ", info.messageId);
+      const info =
+        await transporter.sendMail(mailOptions);
+      console.log(
+        "📨 Mail dispatch success. MessageId:",
+        info.messageId
+      );
     } catch (mailError) {
-      console.error("❌ Mail Transport Core Scrambled:", mailError);
-      return res.status(500).json({ 
-        success: false, 
-        message: "Mail server failed to send message. Please check server logs.",
-        technicalDetails: mailError.message 
+      console.error(
+        "❌ Mail Transport Error:",
+        mailError
+      );
+      return res.status(500).json({
+        success: false,
+        message:
+          "Mail server failed to send message. Please check server logs."
       });
     }
     return res.json({
       success: true,
-      userName: user.name,
-      companyName: targetCompanyName,
-      companyLogo: targetCompanyLogo,
-      targetEmail: targetEmail,
-      message: `OTP successfully dispatched to target email layout.`
+      userName:
+        user.name || "",
+      companyName:
+        targetCompanyName,
+      companyLogo:
+        targetCompanyLogo,
+      targetEmail:
+        targetEmail,
+      phone:
+        targetPhone,
+      userRole:
+        user.role,
+      recoveryTargetRole:
+        recoveryTargetRole,
+      recoveryType:
+        recoveryType,
+      message:
+        "OTP successfully dispatched to target email."
     });
   } catch (error) {
-    console.error("Verification processing fault:", error);
-    return res.status(500).json({ success: false, message: "Server configuration system error." });
+    console.error(
+      "❌ Forget password verification error:",
+      error
+    );
+    return res.status(500).json({
+      success: false,
+      message:
+        "Server configuration system error."
+    });
   }
 });
 
@@ -2298,64 +2463,85 @@ app.put("/bulkUpdateAttendance", async (req, res) => {
 
 /* ================= 1.8. UPDATE LABOUR DETAILS ================= */
 
-app.put("/updateLabourUser/:id", upload.fields([
-  { name: 'dp', maxCount: 1 }, 
-  { name: 'idCard', maxCount: 1 }
-]), async (req, res) => {
+app.put("/updateLabourUser/:id", upload.fields([ { name: 'dp', maxCount: 1 }, { name: 'idCard', maxCount: 1 }]), async (req, res) => {
   try {
     const labourId = req.params.id;
-    const labour = await User.findById(req.params.id);
+    const labour = await User.findById(labourId);
+    if (!labour) { 
+      return res.status(404).json({ success: false, message: "Labour not found" }); 
+    }
     const { phone, password, usedBy, assignType, ...restData } = req.body;
     let updateFields = { ...restData, usedBy };
+    if (usedBy) { 
+      updateFields.usedBy = usedBy; 
+    }
     if (assignType) {
       updateFields.assignType = assignType;
     }
-    if (assignType === "enterprise") {
-      updateFields.currentProjectName = "";
-      if (labour.projectData && labour.projectData.length > 0) {
-        labour.projectData.forEach(p => {
-          if (p.projectLabour) {
-            p.projectLabour.forEach(entry => {
-              entry.inLabour = false;
-            });
-          }
-        });
-        await labour.save();
+    if (usedBy) { 
+      let createdByUser = null; if (labour.createdBy) { 
+        createdByUser = await User.findById(labour.createdBy) .select("_id role") .lean(); 
       }
+      if (!createdByUser) { 
+        const currentVendor = await User.findById(usedBy) .select("_id role") .lean(); 
+        if (currentVendor) { 
+          updateFields.createdBy = currentVendor._id; 
+        } 
+      } 
     }
-    if (labour.createdBy && labour.createdBy.toString() === usedBy) {
-      if (phone) updateFields.phone = phone;
-      if (password && password.trim() !== "") updateFields.password = password;
-    } else {
-      delete updateFields.phone;
-      delete updateFields.password;
+    const finalCreatedBy = updateFields.createdBy || labour.createdBy; 
+    if ( usedBy && finalCreatedBy && finalCreatedBy.toString() === usedBy.toString() ) { 
+      if (phone) { 
+        updateFields.phone = phone; 
+      } 
+      if (password && password.trim() !== "") { 
+        updateFields.password = password; 
+      } 
+    } else { 
+      delete updateFields.phone; delete updateFields.password; 
     }
-    if (req.files) {
-      if (req.files['dp']) {
-        if (labour.profilePic) await deleteOldImageFromS3(labour.profilePic);
-        updateFields.profilePic = req.files['dp'][0].key;
-      }
-      if (req.files['idCard']) {
-        if (labour.idProof) await deleteOldImageFromS3(labour.idProof);
-        updateFields.idProof = req.files['idCard'][0].key;
-      }
+    if (assignType === "enterprise") { 
+      updateFields.currentProjectName = ""; 
+      if ( labour.projectData && labour.projectData.length > 0 ) { 
+        labour.projectData.forEach((project) => { 
+          if (project.projectLabour) { 
+            project.projectLabour.forEach((entry) => { 
+              entry.inLabour = false; 
+            }); 
+          } 
+        }); 
+        await labour.save(); 
+      } 
+    }
+    if (req.files) { 
+      if (req.files["dp"]) { 
+        if (labour.profilePic) { 
+          await deleteOldImageFromS3(labour.profilePic); 
+        } 
+        updateFields.profilePic = req.files["dp"][0].key; 
+      } 
+      if (req.files["idCard"]) { 
+        if (labour.idProof) { 
+          await deleteOldImageFromS3(labour.idProof); 
+        } 
+        updateFields.idProof = req.files["idCard"][0].key; 
+      } 
     }
     const updated = await User.findByIdAndUpdate(
-      req.params.id,
+      labourId,
       { $set: updateFields }, 
       { returnDocument: 'after' }
     );
-    const labours = await User.find({
-      $or: [
-        { createdBy: req.params.vendorId },
-        { usedBy: req.params.vendorId }
-      ]
-    });
-    res.json(updated);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Update failed" });
-  }
+    if (!updated) { 
+      return res.status(404).json({ 
+        success: false, 
+        message: "Labour update failed" 
+      }); 
+    }
+    res.json({ success: true, message: "Labour updated successfully", labour: updated }); 
+  } catch (err) { 
+    res.status(500).json({ success: false, message: "Update failed" }); 
+  } 
 });
 
 /* ================= 1.9. SOFT DELETE (Remove from List) ================= */
