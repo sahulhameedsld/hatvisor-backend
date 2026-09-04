@@ -3392,15 +3392,7 @@ app.delete("/deleteMaterial/:vendorId/:matId", async (req, res) => {
       if (targetMaterial && targetMaterial.images) {
         for (const imgName of targetMaterial.images) {
           if (imgName) {
-            try {
-              const deleteCommand = new DeleteObjectCommand({
-                Bucket: process.env.AWS_BUCKET_NAME,
-                Key: `uploads/materials/${imgName}`,
-              });
-              await s3.send(deleteCommand);
-            } catch (s3Err) {
-              console.log("S3 material image delete warning:", s3Err);
-            }
+            await deleteImageFromS3(imgName);
           }
         }
       }
@@ -3448,6 +3440,17 @@ app.delete("/deleteProduction/:vendorId/:prodId", async (req, res) => {
     if (!currentUser) return res.status(404).json({ message: "User not found buddy!" });
     const mainOwnerId = currentUser.usedBy || currentUser._id;
     const prodObjectId = new mongoose.Types.ObjectId(prodId);
+    const ownerUser = await User.findById(mainOwnerId);
+    if (ownerUser && ownerUser.productionData) {
+      const targetProduction = ownerUser.productionData.find(p => String(p._id) === String(prodObjectId));
+      if (targetProduction && targetProduction.images) {
+        for (const imgUrl of targetProduction.images) {
+          if (imgUrl) {
+            await deleteImageFromS3(imgUrl);
+          }
+        }
+      }
+    }
     await User.updateMany(
       { 
         $or: [
@@ -3893,6 +3896,29 @@ app.delete("/deleteProject/:vendorId/:projectId", async (req, res) => {
     const projectToDelete = user.projectData.find(
       p => String(p._id) === String(projectId)
     );
+    if (projectToDelete) {
+      if (projectToDelete.cover) {
+        await deleteImageFromS3(projectToDelete.cover);
+      }
+      if (projectToDelete.materialStock && projectToDelete.materialStock.length > 0) {
+        for (const stock of projectToDelete.materialStock) {
+          if (stock.images && stock.images.length > 0) {
+            for (const img of stock.images) {
+              await deleteImageFromS3(img);
+            }
+          }
+        }
+      }
+      if (projectToDelete.taskMedia) {
+        const views = ["frontView", "backView", "leftView", "rightView", "ceilingView", "floorView"];
+        for (const viewName of views) {
+          const mediaObj = projectToDelete.taskMedia[viewName];
+          if (mediaObj && mediaObj.url) {
+            await deleteImageFromS3(mediaObj.url);
+          }
+        }
+      }
+    }
     user.projectData = user.projectData.filter(
       p => String(p._id) !== String(projectId)
     );
@@ -5735,6 +5761,16 @@ app.delete("/deleteSupplyItem/:itemId", async (req, res) => {
     const checkUser = await User.findOne({ "supplyData._id": itemId }, { "supplyData.$": 1 });
     if (checkUser && checkUser.supplyData?.[0]?.dispatchStatus === "delivered") {
       return res.status(400).json({ success: false, message: "Delivered items cannot be deleted buddy!" });
+    }
+    if (checkUser && checkUser.supplyData && checkUser.supplyData.length > 0) {
+      const supplyItem = checkUser.supplyData[0];
+      if (supplyItem.images && supplyItem.images.length > 0) {
+        for (const imgUrl of supplyItem.images) {
+          if (imgUrl) {
+            await deleteImageFromS3(imgUrl);
+          }
+        }
+      }
     }
     await User.updateMany(
       { "supplyData._id": itemId },
