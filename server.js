@@ -242,7 +242,7 @@ app.post("/upload", upload.single("task"), (req, res) => {
     if (!req.file) {
       return res.status(400).json({ msg: "No file uploaded" });
     }
-    const file = req.files[0]; 
+    const file = req.file; 
     console.log("✅ Upload successful | Field:", file.fieldname);
     console.log("S3 key:", file.key);
     res.json({
