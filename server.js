@@ -239,7 +239,7 @@ const upload = multer({
 
 app.post("/upload", upload.single("task"), (req, res) => {
   try {
-    if (!req.files || req.files.length === 0) {
+    if (!req.file) {
       return res.status(400).json({ msg: "No file uploaded" });
     }
     const file = req.files[0]; 
