@@ -709,7 +709,7 @@ const UserSchema = new mongoose.Schema({
     company: {
       headerBackground: {
         type: String,
-        default: "#075E54"
+        default: "#2D435C"
       },
       headerFontColor: {
         type: String,
