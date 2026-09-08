@@ -1045,6 +1045,31 @@ app.post("/addProduct/:id", upload.single("image"), async (req, res) => {
   }
 });
 
+/* ================= DELETE PRODUCT API ================= */
+
+app.post("/deleteProduct/:id", async (req, res) => {
+  try {
+    const { index } = req.body;
+    const user = await User.findById(req.params.id);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    if (!Array.isArray(user.products) || user.products[index] === undefined) {
+      return res.status(400).json({ message: "Product not found" });
+    }
+    const targetProduct = user.products[index];
+    if (targetProduct.image) {
+      await deleteImageFromS3(targetProduct.image);
+    }
+    user.products.splice(index, 1);
+    await user.save();
+    res.json(user);
+  } catch (err) {
+    console.log("DELETE PRODUCT ERROR:", err);
+    res.status(500).json({ message: "Delete failed" });
+  }
+});
+
 /* ================= SEARCH ================= */
 
 app.get("/search", async (req, res) => {
