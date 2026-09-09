@@ -1074,33 +1074,112 @@ app.post("/deleteProduct/:id", async (req, res) => {
 
 app.get("/search", async (req, res) => {
   try {
-    const { search, type, userId, category } = req.query;
+    const { search = "", type, userId, category = "All", lat, lng } = req.query;
     let query = {
       _id: { $ne: userId },
       role: "company" // 🔥 only company
     };
-    // 🔥 product type filter
-    if (type) {
-      query["products.type"] = type;
-    }
-    // 🔥 category filter
+    // 🔥 CATEGORY FILTER
     if (category && category !== "All") {
-      query.category = category;
+      query.category = {
+        $regex: `^${category}$`,
+        $options: "i"
+      };
     }
-    // 🔍 search text
+    // 🔥 SEARCH FILTER
     if (search && search.trim() !== "") {
       query.$or = [
-        { companyName: { $regex: search, $options: "i" } },
-        { tag: { $regex: search, $options: "i" } },
-        { category: { $regex: search, $options: "i" } },
-        { "products.name": { $regex: search, $options: "i" } }
+        {
+          companyName: {
+            $regex: search.trim(),
+            $options: "i"
+          }
+        },
+        {
+          tag: {
+            $regex: search.trim(),
+            $options: "i"
+          }
+        },
+        {
+          aboutCompany: {
+            $regex: search.trim(),
+            $options: "i"
+          }
+        },
+        {
+          category: {
+            $regex: search.trim(),
+            $options: "i"
+          }
+        },
+        {
+          "products.name": {
+            $regex: search.trim(),
+            $options: "i"
+          }
+        }
       ];
     }
-    const data = await User.find(query);
-    res.json(data);
+    // 🔥 GET COMPANIES
+    const companies = await User.find(query).lean();
+    // 🔥 LOCATION NOT AVAILABLE
+    if (
+      !lat ||
+      !lng ||
+      isNaN(Number(lat)) ||
+      isNaN(Number(lng))
+    ) {
+      return res.json(companies);
+    }
+    const userLat = Number(lat);
+    const userLng = Number(lng);
+    // 🔥 HAVERSINE DISTANCE
+    const toRadians = (value) => {
+      return (value * Math.PI) / 180;
+    };
+    const calculateDistance = ( lat1, lon1, lat2, lon2 ) => {
+      const R = 6371;
+      const dLat = toRadians(lat2 - lat1);
+      const dLon = toRadians(lon2 - lon1);
+      const a =
+        Math.sin(dLat / 2) *
+          Math.sin(dLat / 2) +
+        Math.cos(toRadians(lat1)) *
+          Math.cos(toRadians(lat2)) *
+          Math.sin(dLon / 2) *
+          Math.sin(dLon / 2);
+      const c =
+        2 * Math.atan2(
+          Math.sqrt(a),
+          Math.sqrt(1 - a)
+        );
+      return R * c;
+    };
+    // 🔥 CALCULATE COMPANY DISTANCE
+    const companiesWithDistance = companies
+      .map((company) => {
+        const companyLat =
+          company.companyLocation?.lat;
+        const companyLng =
+          company.companyLocation?.lng;
+        if (
+          companyLat === undefined ||
+          companyLng === undefined ||
+          companyLat === null ||
+          companyLng === null
+        ) {
+          return null;
+        }
+        const distance = calculateDistance( userLat, userLng, Number(companyLat), Number(companyLng) );
+        return { ...company, distance: Number(distance.toFixed(2)) };
+      })
+      .filter(Boolean);
+      // 🔥 NEAREST FIRST
+      companiesWithDistance.sort((a, b) => a.distance - b.distance);
+      res.json(companiesWithDistance);
   } catch (err) {
-    console.log(err);
-    res.status(500).json({ message: "Search failed" });
+    res.status(500).json({message: "Search failed", error: err.message});
   }
 });
 
