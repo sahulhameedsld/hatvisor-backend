@@ -1202,40 +1202,113 @@ app.get("/getUser/:id", async(req,res)=>{
 
 app.get("/labourProducts", async (req,res)=>{
   try{
-    const { search } = req.query;
+    const { search = "", userId, lat, lng, radius, previousRadius } = req.query;
+    const searchText = search.trim();
     let query = {
+      role: "company",
       "products.type": "labour"
     };
     // 🔍 search filter
     if(search){
       query.$or = [
-        { "products.name": { $regex: search, $options:"i" }},
-        { companyName: { $regex: search, $options:"i" }},
-        { tag: { $regex: search, $options:"i" }}
+        {companyName: { $regex: searchText, $options: "i" }},
+        {tag: { $regex: searchText, $options: "i" }},
+        {"products.name": { $regex: searchText, $options: "i" }}
       ];
     }
-    // 🔥 only users who have labour products
-    const users = await User.find(query);
-    // 🔥 flatten products
+    if (userId) { 
+      query._id = { $ne: userId };
+    }
+    const users = await User.find(query).lean();
     let result = [];
-    users.forEach(u=>{
-      u.products.forEach(p=>{
-        if(p.type.includes("labour")){
-          result.push({
-            productName: p.name,
-            price: p.price,
-            image: p.image,
-            companyName: u.companyName,
-            location: u.companyLocation,
-            phone: u.companyPhone
-          });
+    const calculateDistance = ( lat1, lng1, lat2, lng2 ) => {
+      const R = 6371;
+      const dLat = ((lat2 - lat1) * Math.PI) / 180;
+      const dLng = ((lng2 - lng1) * Math.PI) / 180;
+      const a = 
+        Math.sin(dLat / 2) *
+        Math.sin(dLat / 2) +
+        Math.cos((lat1 * Math.PI) / 180) *
+        Math.cos((lat2 * Math.PI) / 180) *
+        Math.sin(dLng / 2) *
+        Math.sin(dLng / 2);
+      const c =
+        2 * Math.atan2(
+          Math.sqrt(a),
+          Math.sqrt(1 - a)
+        );
+      return R * c;
+    };
+    const hasUserLocation = lat !== undefined && lng !== undefined && !isNaN(Number(lat)) && !isNaN(Number(lng));
+    const userLat = Number(lat);
+    const userLng = Number(lng);
+    const maxRadius = Number(radius);
+    const minRadius = previousRadius !== undefined ? Number(previousRadius) : 0;
+    users.forEach((u) => {
+      if (!Array.isArray(u.products)) {
+        return;
+      }
+      const companyLocation = u.companyLocation;
+      if (!companyLocation || companyLocation.lat === undefined || companyLocation.lng === undefined) {
+        return;
+      }
+      const companyLat = Number(companyLocation.lat);
+      const companyLng = Number(companyLocation.lng);
+      if (isNaN(companyLat) || isNaN(companyLng)) {
+        return;
+      }
+      let distance = null;
+      if (hasUserLocation) {
+        distance = calculateDistance(userLat, userLng, companyLat, companyLng);
+      }
+      u.products.forEach((p) => {
+        const isLabour = Array.isArray(p.type) ? p.type.some((type) => String(type).toLowerCase() === "labour") : String(p.type || "").toLowerCase() === "labour";
+        if (!isLabour) {
+          return;
         }
+        if (searchText) {
+          const productMatch = String(p.name || "")
+            .toLowerCase()
+            .includes(searchText.toLowerCase());
+          const companyMatch = String(u.companyName || "")
+            .toLowerCase()
+            .includes(searchText.toLowerCase());
+          const tagMatch = String(u.tag || "")
+            .toLowerCase()
+            .includes(searchText.toLowerCase());
+          if (!productMatch && !companyMatch && !tagMatch) {
+            return;
+          }
+        }
+        if (hasUserLocation && distance !== null) {
+          if (distance > maxRadius || distance <= minRadius) {
+            return;
+          }
+        }
+        result.push({
+          uniqueId: `${u._id}_${p._id}`,
+          productId: p._id,
+          vendorId: u._id,
+          productName: p.name,
+          price: p.price,
+          image: p.image,
+          companyName: u.companyName,
+          phone: u.companyPhone,
+          location: companyLocation,
+          city: companyLocation.city || "",
+          distance: distance !== null ? Number(distance.toFixed(1)) : null
+        });
       });
     });
+    result.sort((a, b) => {
+      if (a.distance === null) return 1;
+      if (b.distance === null) return -1;
+      return a.distance - b.distance;
+    });
     res.json(result);
-  }catch(err){
-    console.log(err);
-    res.status(500).json({ message:"Error" });
+  } catch (err) {
+    console.log("labourProducts error:", err);
+    res.status(500).json({ message: "Error" });
   }
 });
 
@@ -2707,7 +2780,7 @@ app.put("/multiAssignLabours", async (req, res) => {
 
 app.get("/getPublicLabours", async (req, res) => {
   try {
-    const { city, role } = req.query; 
+    const { city, role, lat, lng, radius } = req.query; 
     let filter = {
       role: "labour", 
       "supplyData.dispatchStatus": { $ne: "shipped" },
@@ -2722,22 +2795,82 @@ app.get("/getPublicLabours", async (req, res) => {
       ]
     };
     // 2. Job Role search (irundha add pannu)
-    if (role) {
-      filter.jobRole = { $regex: new RegExp(role, "i") };
+    if (role && role.trim()) {
+      filter.jobRole = {
+        $regex: role.trim(),
+        $options: "i"
+      };
     }
-    const allLabours = await User.find(filter);
-    const sortedLabours = allLabours.sort((a, b) => {
-      const cityA = a.location?.city || a.city || "";
-      const cityB = b.location?.city || b.city || "";
-      const isAMatch = cityA.toLowerCase() === city.toLowerCase();
-      const isBMatch = cityB.toLowerCase() === city.toLowerCase();
-      if (isAMatch && !isBMatch) return -1;
-      if (!isAMatch && isBMatch) return 1;
-      return 0; 
+    const allLabours = await User.find(filter).lean();
+    const searchLat = parseFloat(lat);
+    const searchLng = parseFloat(lng);
+    const searchRadius = parseFloat(radius);
+    const hasCoordinates = Number.isFinite(searchLat) && Number.isFinite(searchLng);
+    const hasRadius = Number.isFinite(searchRadius) && searchRadius > 0;
+    const calculateDistance = (lat1, lon1, lat2, lon2) => {
+      const earthRadiusKm = 6371;
+      const dLat = ((lat2 - lat1) * Math.PI) / 180;
+      const dLon = ((lon2 - lon1) * Math.PI) / 180;
+      const a =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos((lat1 * Math.PI) / 180) *
+          Math.cos((lat2 * Math.PI) / 180) *
+          Math.sin(dLon / 2) *
+          Math.sin(dLon / 2);
+      const c =
+        2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return earthRadiusKm * c;
+    };
+    let result = allLabours.map((labour) => {
+      const labourLat = parseFloat(labour.location?.lat ?? labour.location?.latitude);
+      const labourLng = parseFloat(labour.location?.lng ?? labour.location?.longitude);
+      let distance = null;
+      if (hasCoordinates && Number.isFinite(labourLat) && Number.isFinite(labourLng)) {
+        distance = calculateDistance(searchLat, searchLng, labourLat, labourLng);
+      }
+      return {
+        ...labour,
+        distance: distance !== null
+          ? Number(distance.toFixed(2))
+          : null
+      };
     });
-    res.json(sortedLabours);
+    if (hasCoordinates && hasRadius) {
+      result = result.filter((labour) => {
+        if (labour.distance === null) {
+          return false;
+        }
+        return labour.distance <= searchRadius;
+      });
+    }
+    if (hasCoordinates) {
+      result.sort((a, b) => {
+        if (a.distance === null && b.distance === null) {
+          return 0;
+        }
+        if (a.distance === null) {
+          return 1;
+        }
+        if (b.distance === null) {
+          return -1;
+        }
+        return a.distance - b.distance;
+      });
+    } else {
+      result.sort((a, b) => {
+        const cityA = a.location?.city || a.city || "";
+        const cityB = b.location?.city || b.city || "";
+        const isAMatch = city && cityA.toLowerCase() === city.toLowerCase();
+        const isBMatch = city && cityB.toLowerCase() === city.toLowerCase();
+        if (isAMatch && !isBMatch) return -1;
+        if (!isAMatch && isBMatch) return 1;
+        return 0;
+      });
+    }
+    res.json(result);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    console.error("GET PUBLIC LABOURS ERROR:", err);
+    res.status(500).json({message: err.message});
   }
 });
 
