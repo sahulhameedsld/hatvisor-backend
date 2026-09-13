@@ -1205,9 +1205,13 @@ app.get("/labourProducts", async (req,res)=>{
     const { search = "", userId, lat, lng, radius, previousRadius } = req.query;
     const searchText = search.trim();
     let query = {
-      role: "company",
-      "products.type": "labour"
+      role: "company"
     };
+    if (userId) {
+      query._id = {
+        $ne: userId
+      };
+    }
     // 🔍 search filter
     if(search){
       query.$or = [
@@ -1215,9 +1219,6 @@ app.get("/labourProducts", async (req,res)=>{
         {tag: { $regex: searchText, $options: "i" }},
         {"products.name": { $regex: searchText, $options: "i" }}
       ];
-    }
-    if (userId) { 
-      query._id = { $ne: userId };
     }
     const users = await User.find(query).lean();
     let result = [];
@@ -1239,76 +1240,88 @@ app.get("/labourProducts", async (req,res)=>{
         );
       return R * c;
     };
-    const hasUserLocation = lat !== undefined && lng !== undefined && !isNaN(Number(lat)) && !isNaN(Number(lng));
+    const hasUserLocation = lat !== undefined && lng !== undefined && lat !== "" && lng !== "" && Number.isFinite(Number(lat)) && Number.isFinite(Number(lng));
     const userLat = Number(lat);
     const userLng = Number(lng);
     const maxRadius = Number(radius);
-    const minRadius = previousRadius !== undefined ? Number(previousRadius) : 0;
-    users.forEach((u) => {
-      if (!Array.isArray(u.products)) {
+    const minRadius = previousRadius !== "" && Number.isFinite( Number(previousRadius) ) ? Number(previousRadius) : 0;
+    users.forEach((vendor) => {
+      if (!Array.isArray(vendor.products)) {
         return;
       }
-      const companyLocation = u.companyLocation;
+      const companyLocation = vendor.companyLocation;
       if (!companyLocation || companyLocation.lat === undefined || companyLocation.lng === undefined) {
         return;
       }
       const companyLat = Number(companyLocation.lat);
       const companyLng = Number(companyLocation.lng);
-      if (isNaN(companyLat) || isNaN(companyLng)) {
+      if (!Number.isFinite(companyLat) || !Number.isFinite(companyLng)) {
         return;
       }
       let distance = null;
       if (hasUserLocation) {
         distance = calculateDistance(userLat, userLng, companyLat, companyLng);
       }
-      u.products.forEach((p) => {
-        const isLabour = Array.isArray(p.type) ? p.type.some((type) => String(type).toLowerCase() === "labour") : String(p.type || "").toLowerCase() === "labour";
-        if (!isLabour) {
+      vendor.products.forEach((product) => {
+        let isLabourTool = false;
+        if (Array.isArray(product.type)) {
+          isLabourTool = product.type.some((type) => String(type).trim().toLowerCase() === "labour tool");
+        } else {
+          isLabourTool = String(product.type || "").trim().toLowerCase() === "labour tool";
+        }
+        if (!isLabourTool) {
           return;
         }
         if (searchText) {
-          const productMatch = String(p.name || "")
-            .toLowerCase()
-            .includes(searchText.toLowerCase());
-          const companyMatch = String(u.companyName || "")
-            .toLowerCase()
-            .includes(searchText.toLowerCase());
-          const tagMatch = String(u.tag || "")
-            .toLowerCase()
-            .includes(searchText.toLowerCase());
+          const productName = String(product.name || "").toLowerCase();
+          const companyName = String(vendor.companyName || "").toLowerCase();
+          const tag = String(vendor.tag || "").toLowerCase();
+          const searchLower = searchText.toLowerCase();
+          const productMatch = productName.includes(searchLower);
+          const companyMatch = companyName.includes(searchLower);
+          const tagMatch = tag.includes(searchLower);
           if (!productMatch && !companyMatch && !tagMatch) {
             return;
           }
         }
         if (hasUserLocation && distance !== null) {
+          if (!Number.isFinite(maxRadius)) {
+            return;
+          }
           if (distance > maxRadius || distance <= minRadius) {
             return;
           }
         }
         result.push({
-          uniqueId: `${u._id}_${p._id}`,
-          productId: p._id,
-          vendorId: u._id,
-          productName: p.name,
-          price: p.price,
-          image: p.image,
-          companyName: u.companyName,
-          phone: u.companyPhone,
-          location: companyLocation,
-          city: companyLocation.city || "",
-          distance: distance !== null ? Number(distance.toFixed(1)) : null
+          uniqueId:`${vendor._id}_${product._id}`,
+          productId:product._id,
+          vendorId:vendor._id,
+          productName:product.name,
+          price:product.price,
+          image:product.image,
+          companyName:vendor.companyName,
+          phone:vendor.companyPhone,
+          location:companyLocation,
+          city:companyLocation.city || "",
+          distance:distance !== null ? Number(distance.toFixed(1)) : null
         });
       });
     });
     result.sort((a, b) => {
-      if (a.distance === null) return 1;
-      if (b.distance === null) return -1;
-      return a.distance - b.distance;
+      if (a.distance === null) {
+        return 1;
+      }
+      if (b.distance === null) {
+        return -1;
+      }
+      return (
+        a.distance - b.distance
+      );
     });
     res.json(result);
   } catch (err) {
-    console.log("labourProducts error:", err);
-    res.status(500).json({ message: "Error" });
+    console.error("labourProducts error:", err);
+    res.status(500).json({message: "Error fetching labour tools"});
   }
 });
 
