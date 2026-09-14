@@ -1200,10 +1200,12 @@ app.get("/getUser/:id", async(req,res)=>{
 
 /* ================= SEARCH TOOL ================= */
 
-app.get("/labourProducts", async (req,res)=>{
-  try{
-    const { search = "", userId, lat, lng, radius, previousRadius } = req.query;
-    const searchText = search.trim();
+/* ================= SEARCH TOOL ================= */
+
+app.get("/labourProducts", async (req, res) => {
+  try {
+    const {search = "", userId, lat, lng, radius, previousRadius} = req.query;
+    const searchText = String(search || "").trim();
     let query = {
       role: "company"
     };
@@ -1212,39 +1214,59 @@ app.get("/labourProducts", async (req,res)=>{
         $ne: userId
       };
     }
-    // 🔍 search filter
-    if(search){
+    if (searchText) {
       query.$or = [
-        {companyName: { $regex: searchText, $options: "i" }},
-        {tag: { $regex: searchText, $options: "i" }},
-        {"products.name": { $regex: searchText, $options: "i" }}
+        {
+          companyName: {
+            $regex: searchText,
+            $options: "i"
+          }
+        },
+        {
+          tag: {
+            $regex: searchText,
+            $options: "i"
+          }
+        },
+        {
+          "products.name": {
+            $regex: searchText,
+            $options: "i"
+          }
+        }
       ];
     }
     const users = await User.find(query).lean();
-    let result = [];
-    const calculateDistance = ( lat1, lng1, lat2, lng2 ) => {
+    const searchLat = Number(lat);
+    const searchLng = Number(lng);
+    const maxRadius = Number(radius);
+    const minRadius =
+      previousRadius !== undefined &&
+      previousRadius !== "" &&
+      Number.isFinite(Number(previousRadius))
+        ? Number(previousRadius)
+        : 0;
+    const hasUserLocation = Number.isFinite(searchLat) && Number.isFinite(searchLng);
+    const calculateDistance = (lat1, lng1, lat2, lng2) => {
       const R = 6371;
       const dLat = ((lat2 - lat1) * Math.PI) / 180;
       const dLng = ((lng2 - lng1) * Math.PI) / 180;
-      const a = 
+      const a =
         Math.sin(dLat / 2) *
-        Math.sin(dLat / 2) +
+          Math.sin(dLat / 2) +
         Math.cos((lat1 * Math.PI) / 180) *
-        Math.cos((lat2 * Math.PI) / 180) *
-        Math.sin(dLng / 2) *
-        Math.sin(dLng / 2);
+          Math.cos((lat2 * Math.PI) / 180) *
+          Math.sin(dLng / 2) *
+          Math.sin(dLng / 2);
       const c =
-        2 * Math.atan2(
+        2 *
+        Math.atan2(
           Math.sqrt(a),
           Math.sqrt(1 - a)
         );
       return R * c;
     };
-    const hasUserLocation = lat !== undefined && lng !== undefined && lat !== "" && lng !== "" && Number.isFinite(Number(lat)) && Number.isFinite(Number(lng));
-    const userLat = Number(lat);
-    const userLng = Number(lng);
-    const maxRadius = Number(radius);
-    const minRadius = previousRadius !== "" && Number.isFinite( Number(previousRadius) ) ? Number(previousRadius) : 0;
+    let result = [];
     users.forEach((vendor) => {
       if (!Array.isArray(vendor.products)) {
         return;
@@ -1260,7 +1282,7 @@ app.get("/labourProducts", async (req,res)=>{
       }
       let distance = null;
       if (hasUserLocation) {
-        distance = calculateDistance(userLat, userLng, companyLat, companyLng);
+        distance = calculateDistance(searchLat, searchLng, companyLat, companyLng);
       }
       vendor.products.forEach((product) => {
         let isLabourTool = false;
@@ -1273,18 +1295,15 @@ app.get("/labourProducts", async (req,res)=>{
           return;
         }
         if (searchText) {
+          const searchLower = searchText.toLowerCase();
           const productName = String(product.name || "").toLowerCase();
           const companyName = String(vendor.companyName || "").toLowerCase();
           const tag = String(vendor.tag || "").toLowerCase();
-          const searchLower = searchText.toLowerCase();
-          const productMatch = productName.includes(searchLower);
-          const companyMatch = companyName.includes(searchLower);
-          const tagMatch = tag.includes(searchLower);
-          if (!productMatch && !companyMatch && !tagMatch) {
+          if (!productName.includes(searchLower) && !companyName.includes(searchLower) && !tag.includes(searchLower)) {
             return;
           }
         }
-        if (hasUserLocation && distance !== null) {
+        if (hasUserLocation) {
           if (!Number.isFinite(maxRadius)) {
             return;
           }
@@ -1293,35 +1312,34 @@ app.get("/labourProducts", async (req,res)=>{
           }
         }
         result.push({
-          uniqueId:`${vendor._id}_${product._id}`,
-          productId:product._id,
-          vendorId:vendor._id,
-          productName:product.name,
-          price:product.price,
-          image:product.image,
-          companyName:vendor.companyName,
-          phone:vendor.companyPhone,
-          location:companyLocation,
-          city:companyLocation.city || "",
-          distance:distance !== null ? Number(distance.toFixed(1)) : null
+          uniqueId: `${vendor._id}_${product._id}`,
+          productId: product._id,
+          vendorId: vendor._id,
+          productName: product.name,
+          price: product.price,
+          image: product.image,
+          companyName: vendor.companyName,
+          phone: vendor.companyPhone,
+          location: companyLocation,
+          city: companyLocation.city || "",
+          distance:
+            distance !== null
+              ? Number(distance.toFixed(1))
+              : null
         });
       });
     });
     result.sort((a, b) => {
-      if (a.distance === null) {
-        return 1;
-      }
-      if (b.distance === null) {
-        return -1;
-      }
-      return (
-        a.distance - b.distance
-      );
+      if (a.distance === null) return 1;
+      if (b.distance === null) return -1;
+      return (Number(a.distance) - Number(b.distance));
     });
     res.json(result);
   } catch (err) {
     console.error("labourProducts error:", err);
-    res.status(500).json({message: "Error fetching labour tools"});
+    res.status(500).json({
+      message: "Error fetching labour tools"
+    });
   }
 });
 
