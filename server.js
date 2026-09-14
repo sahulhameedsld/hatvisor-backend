@@ -1,5 +1,6 @@
 const express = require("express");
 const mongoose = require("mongoose");
+const axios = require("axios");
 require("dotenv").config();
 const router = express.Router();
 const nodemailer = require('nodemailer');
@@ -262,6 +263,40 @@ app.post("/upload", upload.single("task"), (req, res) => {
 mongoose.connect("mongodb+srv://hatvisor:SLD%40cse311@hatvisor.xpvbtkl.mongodb.net/Hatvisor?retryWrites=true&w=majority")
 .then(()=>console.log("MongoDB Connected"))
 .catch(err=>console.log(err));
+
+/* ================= REVERSE GEOCODE ================= */
+
+app.get("/reverseGeocode", async (req, res) => {
+  try {
+    const { lat, lng } = req.query;
+    const latitude = Number(lat);
+    const longitude = Number(lng);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+      return res.status(400).json({
+        message: "Invalid coordinates"
+      });
+    }
+    const response = await axios.get("https://nominatim.openstreetmap.org/reverse", {
+      params: {
+        format: "json",
+        lat: latitude,
+        lon: longitude,
+        zoom: 18,
+        addressdetails: 1
+      },
+      headers: {
+        "User-Agent": "Hatvisor/1.0"
+      },
+      timeout: 10000
+    });
+    const address = response.data?.address || {};
+    const city = address.city || address.town || address.village || address.municipality || address.suburb || address.county || address.state || "Unknown";
+    res.json({city, address: response.data?.display_name || ""});
+  } catch (err) {
+    console.error("Reverse geocoding error:", err.message);    
+    res.status(500).json({message: "Reverse geocoding failed"});
+  }
+});
 
 /* ================= SCHEMA ================= */
 
