@@ -785,6 +785,10 @@ const MessageSchema = new mongoose.Schema({
   senderId: String,
   receiverId: String,
   text: String,
+  productId: {
+    type: mongoose.Schema.Types.ObjectId,
+    default: null
+  },
   createdAt: {
     type: Date,
     default: Date.now
@@ -1706,11 +1710,12 @@ io.on("connection", (socket) => {
 
 app.post("/sendMessage", async (req, res) => {
   try {
-    const { senderId, receiverId, text } = req.body;
+    const { senderId, receiverId, text, productId } = req.body;
     const msg = new Message({
       senderId,
       receiverId,
-      text
+      text: text || "",
+      productId: productId || null
     });
     await msg.save();
     res.json(msg);
@@ -1730,11 +1735,21 @@ app.get("/getMessages", async (req, res) => {
         { senderId: user1, receiverId: user2 },
         { senderId: user2, receiverId: user1 }
       ]
-    }).sort({ createdAt: 1 });
-    res.json(messages);
+    }).sort({ createdAt: 1 }).lean();
+    const result = [];
+    for (const message of messages) {
+      if (!message.productId) {
+        result.push(message);
+        continue;
+      }
+      const productOwnerId = String(message.senderId) === String(user1) ? message.receiverId : message.senderId;
+      const productOwner = await User.findById(productOwnerId).select("products");
+      const product = productOwner?.products?.find((item) => String(item._id) === String(message.productId));
+      result.push({...message, product: product || null});
+    }
+    res.json(result);
   } catch (err) {
-    console.log(err);
-    res.status(500).json({ message: "Fetch failed" });
+    res.status(500).json({message: "Fetch failed"});
   }
 });
 
