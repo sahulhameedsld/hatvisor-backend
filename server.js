@@ -1200,8 +1200,6 @@ app.get("/getUser/:id", async(req,res)=>{
 
 /* ================= SEARCH TOOL ================= */
 
-/* ================= SEARCH TOOL ================= */
-
 app.get("/labourProducts", async (req, res) => {
   try {
     const {search = "", userId, lat, lng, radius, previousRadius} = req.query;
