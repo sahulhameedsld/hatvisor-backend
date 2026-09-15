@@ -276,24 +276,21 @@ app.get("/reverseGeocode", async (req, res) => {
     }
     try {
       const response = await axios.get("https://api.bigdatacloud.net/data/reverse-geocode-client", {
-        params: {
-          latitude: latitude,
-          longitude: longitude,
-          localityLanguage: "en"
-        },
-        timeout: 30000
+        params: {latitude, longitude, localityLanguage: "en"},
+        timeout: 30000,
+        headers: {Accept: "application/json"}
       });
       const data = response.data || {};
-      const city = data.city || data.locality || data.principalSubdivision || data.county || data.countryName || "Chennai";
+      const city = data.city || data.locality || data.principalSubdivision || data.county || data.countryName || "Unknown City";
       const displayAddress = [city, data.countryName].filter(Boolean).join(", ");
-      return res.json({ city, address: displayAddress, lat: latitude, lng: longitude });
+      return res.json({city, address: displayAddress, lat: latitude, lng: longitude});
     } catch (apiErr) {
-      console.error("BigDataCloud reverse geocode failed:", apiErr.message);
-      return res.json({ city: "Chennai", address: "Chennai, India", lat: latitude, lng: longitude });
+      console.error("BigDataCloud reverse geocode failed:", apiErr.response?.status, apiErr.response?.data || apiErr.message );
+      return res.json({city: "Unknown City", address: "", lat: latitude, lng: longitude});
     }
   } catch (err) {
-    console.error("Reverse geocoding error:", err.message);    
-    res.status(500).json({ message: "Reverse geocoding failed" });
+    console.error("Reverse geocoding error:", err.message);
+    return res.status(500).json({message: "Reverse geocoding failed"});
   }
 });
 
