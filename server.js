@@ -287,11 +287,11 @@ app.get("/reverseGeocode", async (req, res) => {
       });
       const data = response.data || {};
       const city = data.city || data.locality || data.principalSubdivision || data.countryName || "Unknown City";
-      const displayAddress = `${city}, ${data.countryName || ""}`.trim();
-      return res.json({ city, address: displayAddress });
+      const displayAddress = [city, data.countryName].filter(Boolean).join(", ");
+      return res.json({ city, address: displayAddress, lat: latitude, lng: longitude });
     } catch (apiErr) {
-      console.warn("External reverse geocode API failed, falling back:", apiErr.message);
-      return res.status(500).json({ message: "Reverse geocoding failed" });
+      console.error("BigDataCloud reverse geocode failed:", apiErr.response?.status, apiErr.response?.data || apiErr.message);
+      return res.json({ city: "Unknown City", address: "", lat: latitude, lng: longitude });
     }
   } catch (err) {
     console.error("Reverse geocoding error:", err.message);    
