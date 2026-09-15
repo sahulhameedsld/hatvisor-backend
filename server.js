@@ -277,28 +277,21 @@ app.get("/reverseGeocode", async (req, res) => {
       });
     }
     try {
-      const response = await axios.get("https://nominatim.openstreetmap.org/reverse", {
+      const response = await axios.get("https://api.bigdatacloud.net/data/reverse-geocode-client", {
         params: {
-          format: "json",
-          lat: latitude,
-          lon: longitude,
-          zoom: 18,
-          addressdetails: 1
-        },
-        headers: {
-          "User-Agent": "Hatvisor/1.0"
+          latitude: latitude,
+          longitude: longitude,
+          localityLanguage: "en"
         },
         timeout: 30000
       });
-      const address = response.data?.address || {};
-      const city = address.city || address.town || address.village || address.municipality || address.suburb || address.county || address.state || "Unknown";
-      return res.json({ city, address: response.data?.display_name || "" });
-    } catch (nominatimErr) {
-      console.warn("Nominatim external API failed, using fallback coordinates display:", nominatimErr.message);
-      return res.json({ 
-        city: `Lat: ${latitude.toFixed(2)}, Lng: ${longitude.toFixed(2)}`, 
-        address: "Custom Location" 
-      });
+      const data = response.data || {};
+      const city = data.city || data.locality || data.principalSubdivision || data.countryName || "Unknown City";
+      const displayAddress = `${city}, ${data.countryName || ""}`.trim();
+      return res.json({ city, address: displayAddress });
+    } catch (apiErr) {
+      console.warn("External reverse geocode API failed, falling back:", apiErr.message);
+      return res.status(500).json({ message: "Reverse geocoding failed" });
     }
   } catch (err) {
     console.error("Reverse geocoding error:", err.message);    
