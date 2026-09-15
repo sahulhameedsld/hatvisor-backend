@@ -275,7 +275,7 @@ app.get("/reverseGeocode", async (req, res) => {
       return res.status(400).json({message: "Invalid coordinates"});
     }
     try {
-      const response = await axios.get("https://api.bigdatacloud.net/data/reverse-geocode-client", {
+      const response = await axios.get("https://nominatim.openstreetmap.org/reverse", {
         params: {latitude, longitude, localityLanguage: "en"},
         timeout: 30000,
         headers: {Accept: "application/json"}
