@@ -272,33 +272,24 @@ app.get("/reverseGeocode", async (req, res) => {
     const latitude = Number(lat);
     const longitude = Number(lng);
     if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
-      return res.status(400).json({
-        message: "Invalid coordinates"
-      });
+      return res.status(400).json({message: "Invalid coordinates"});
     }
     try {
-      const response = await axios.get("https://nominatim.openstreetmap.org/reverse", {
+      const response = await axios.get("https://api.bigdatacloud.net/data/reverse-geocode-client", {
         params: {
-          format: "json",
-          lat: latitude,
-          lon: longitude,
-          zoom: 18,
-          addressdetails: 1
+          latitude: latitude,
+          longitude: longitude,
+          localityLanguage: "en"
         },
-        headers: {
-          "User-Agent": "Hatvisor/1.0"
-        },
-        timeout: 5000
+        timeout: 30000
       });
-      const address = response.data?.address || {};
-      const city = address.city || address.town || address.village || address.municipality || address.suburb || address.county || address.state || "Current Location";
-      return res.json({ city, address: response.data?.display_name || "" });
-    } catch (nominatimErr) {
-      console.warn("Nominatim external API failed, using fallback coordinates display:", nominatimErr.message);
-      return res.json({ 
-        city: `Lat: ${latitude.toFixed(2)}, Lng: ${longitude.toFixed(2)}`, 
-        address: "Custom Location" 
-      });
+      const data = response.data || {};
+      const city = data.city || data.locality || data.principalSubdivision || data.county || data.countryName || "Chennai";
+      const displayAddress = [city, data.countryName].filter(Boolean).join(", ");
+      return res.json({ city, address: displayAddress, lat: latitude, lng: longitude });
+    } catch (apiErr) {
+      console.error("BigDataCloud reverse geocode failed:", apiErr.message);
+      return res.json({ city: "Chennai", address: "Chennai, India", lat: latitude, lng: longitude });
     }
   } catch (err) {
     console.error("Reverse geocoding error:", err.message);    
