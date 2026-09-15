@@ -276,17 +276,22 @@ app.get("/reverseGeocode", async (req, res) => {
     }
     try {
       const response = await axios.get("https://nominatim.openstreetmap.org/reverse", {
-        params: {latitude, longitude, localityLanguage: "en"},
+        params: { lat: latitude, lon: longitude, format: "json" },
         timeout: 30000,
-        headers: {Accept: "application/json"}
+        headers: { 
+          Accept: "application/json",
+          "User-Agent": "HatvisorApp/1.0"
+        }
       });
       const data = response.data || {};
-      const city = data.city || data.locality || data.principalSubdivision || data.county || data.countryName || "Unknown City";
-      const displayAddress = [city, data.countryName].filter(Boolean).join(", ");
-      return res.json({city, address: displayAddress, lat: latitude, lng: longitude});
+      const address = data.address || {};
+      const city = address.city || address.town || address.village || address.suburb || address.county || address.state_district || "Unknown City";
+      const country = address.country || "";
+      const displayAddress = [city, country].filter(Boolean).join(", ");
+      return res.json({ city, address: displayAddress, lat: latitude, lng: longitude });
     } catch (apiErr) {
-      console.error("BigDataCloud reverse geocode failed:", apiErr.response?.status, apiErr.response?.data || apiErr.message );
-      return res.json({city: "Unknown City", address: "", lat: latitude, lng: longitude});
+      console.error("OpenStreetMap reverse geocode failed:", apiErr.response?.status, apiErr.response?.data || apiErr.message );
+      return res.json({ city: "Unknown City", address: "", lat: latitude, lng: longitude });
     }
   } catch (err) {
     console.error("Reverse geocoding error:", err.message);
