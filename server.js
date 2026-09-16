@@ -283,14 +283,13 @@ app.get("/reverseGeocode", async (req, res) => {
           "User-Agent": "HatvisorApp/1.0 (location service)"
         }
       });
+      const data = response.data || {};
+      const address = data.address || {};
       const city = address.city || address.town || address.municipality || address.village || address.city_district || address.county || address.state_district || "";
-      const country = address.country || "";
-      const state = address.state || address.region || "";
       const cleanCity = String(city).trim();
-      const displayAddress = [cleanCity, state, country].filter(Boolean).filter((value, index, array) => array.findIndex((item) => item.toLowerCase() === value.toLowerCase()) === index).join(", ");
-      return res.json({city: cleanCity || null, state, country, address: displayAddress, lat: latitude, lng: longitude});
+      return res.json({ city: cleanCity || null });
     } catch (apiErr) {
-      return res.json({city: null, state: "", country: "", address: "", lat: latitude, lng: longitude});
+      return res.json({ city: null });
     }
   } catch (err) {
     return res.status(500).json({message: "Reverse geocoding failed"});
