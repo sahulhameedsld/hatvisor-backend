@@ -272,26 +272,20 @@ app.get("/reverseGeocode", async (req, res) => {
     const latitude = Number(lat);
     const longitude = Number(lng);
     if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
-      return res.status(400).json({message: "Invalid coordinates"});
-    }
-    try {
-      const response = await axios.get("https://nominatim.openstreetmap.org/reverse", {
-        params: { lat: latitude, lon: longitude, format: "jsonv2", addressdetails: 1, zoom: 10 },
-        timeout: 30000,
-        headers: {
-          Accept: "application/json",
-          "User-Agent": "HatvisorApp/1.0 (location service)"
-        }
+      return res.status(400).json({
+        message: "Invalid coordinates"
       });
-      const address = response.data?.address || {};
-      const city = address.city || address.town || address.municipality || address.village || address.county || address.state_district || address.city_district || "";
-      const cleanCity = String(city).trim();
-      return res.json({ city: cleanCity || null, lat: latitude, lng: longitude });
-    } catch (apiErr) {
-      return res.json({ city: null, lat: latitude, lng: longitude });
     }
+    const response = await axios.get("https://nominatim.openstreetmap.org/reverse", {
+      params: { format: "json", lat: latitude, lon: longitude, zoom: 18, addressdetails: 1 },
+      headers: { "User-Agent": "Hatvisor/1.0" },
+      timeout: 10000
+    });
+    const address = response.data?.address || {};
+    const city = address.city || address.town || address.village || address.municipality || address.suburb || address.county || address.state || "Unknown";
+    res.json({ city, address: response.data?.display_name || "" });
   } catch (err) {
-    return res.status(500).json({message: "Reverse geocoding failed"});
+    res.status(500).json({message: "Reverse geocoding failed"});
   }
 });
 
