@@ -272,18 +272,20 @@ app.get("/reverseGeocode", async (req, res) => {
     const latitude = Number(lat);
     const longitude = Number(lng);
     if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
-      return res.status(400).json({
-        message: "Invalid coordinates"
-      });
+      return res.status(400).json({message: "Invalid coordinates"});
     }
-    const response = await axios.get("https://nominatim.openstreetmap.org/reverse", {
-      params: { format: "json", lat: latitude, lon: longitude, zoom: 18, addressdetails: 1 },
-      headers: { "User-Agent": "Hatvisor/1.0" },
-      timeout: 10000
-    });
-    const address = response.data?.address || {};
-    const city = address.city || address.town || address.village || address.municipality || address.suburb || address.county || address.state || "Unknown";
-    res.json({ city, address: response.data?.display_name || "" });
+    try {
+      const response = await axios.get("https://nominatim.openstreetmap.org/reverse", {
+        params: { format: "json", lat: latitude, lon: longitude, addressdetails: 1 },
+        headers: { "User-Agent": "Hatvisor/1.0" },
+        timeout: 10000
+      });
+      const address = response.data?.address || {};
+      const city = address.city || address.town || address.village || address.municipality || address.suburb || address.county || address.state || "Unknown";
+      res.json({ city, address: response.data?.display_name || "" });
+    } catch (apiErr) {
+      return res.json({ city: "Unknown", address: "" });
+    }
   } catch (err) {
     res.status(500).json({message: "Reverse geocoding failed"});
   }
