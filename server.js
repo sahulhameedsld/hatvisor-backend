@@ -278,7 +278,7 @@ app.get("/reverseGeocode", async (req, res) => {
       const response = await axios.get("https://nominatim.openstreetmap.org/reverse", {
         params: { format: "json", lat: latitude, lon: longitude, addressdetails: 1 },
         headers: { "User-Agent": "Hatvisor/1.0" },
-        timeout: 10000
+        timeout: 30000
       });
       const address = response.data?.address || {};
       const city = address.city || address.town || address.village || address.municipality || address.suburb || address.county || address.state || "Unknown";
