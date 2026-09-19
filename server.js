@@ -276,23 +276,18 @@ app.get("/reverseGeocode", async (req, res) => {
         message: "Invalid coordinates"
       });
     }
-    const response = await axios.get("https://api.bigdatacloud.net/data/reverse-geocode-client", {
+    const response = await axios.get("https://api-bdc.net/data/reverse-geocode", {
       params: {
-        format: "json",
-        lat: latitude,
-        lon: longitude,
-        zoom: 18,
-        addressdetails: 1
-      },
-      headers: {
-        "User-Agent": "HatvisorApp/1.0",
-        "Accept": "application/json"
+        latitude,
+        longitude,
+        localityLanguage: "en",
+        key: process.env.BIGDATACLOUD_API_KEY
       },
       timeout: 60000
     });
-    const address = response.data?.address || {};
-    const city = address.city || address.town || address.village || address.municipality || address.suburb || address.county || "Unknown";
-    return res.json({ city, address: response.data?.display_name || "" });
+    const data = response.data || {};
+    const city = data.city || data.locality || data.principalSubdivision || "Unknown";
+    return res.json({ city, address: data.localityInfo?.informative?.[0]?.name || city});
   } catch (err) {
     console.error("Reverse Geocode Error:", err.response?.status, err.response?.data || err.message);
     return res.status(500).json({message: "Reverse geocoding failed"});
