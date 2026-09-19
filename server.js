@@ -286,7 +286,7 @@ app.get("/reverseGeocode", async (req, res) => {
       timeout: 60000
     });
     const data = response.data || {};
-    const city = data.city || data.locality || data.principalSubdivision || "Unknown";
+    const city = data.locality || data.city || data.town || data.village || data.municipality || data.principalSubdivision || "Unknown";
     return res.json({ city, address: data.localityInfo?.informative?.[0]?.name || city});
   } catch (err) {
     console.error("Reverse Geocode Error:", err.response?.status, err.response?.data || err.message);
