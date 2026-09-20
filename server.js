@@ -1019,6 +1019,52 @@ app.post("/uploadCompanyLogo/:id", upload.single("logo"), async(req,res) => {
   }
 });
 
+/* ================= UPDATE PROJECT COVER (S3) ================= */
+
+app.put("/updateProjectCover/:projectId", upload.single("cover"), async (req, res) => {
+  try {
+    const projectId = req.params.projectId;
+    if (!req.file) {
+      return res.status(400).json({ msg: "No image file provided" });
+    }
+    const fullKey = req.file.key;
+    const newCoverFilename = path.basename(fullKey);
+    const existingUserDoc = await User.findOne({ "projectData._id": projectId });
+    if (!existingUserDoc) {
+      return res.status(404).json({ msg: "Project not found" });
+    }
+    const currentProj = existingUserDoc.projectData.id(projectId);
+    if (currentProj && currentProj.cover && currentProj.cover !== newCoverFilename) {
+      try {
+        await deleteOldImageFromS3(currentProj.cover);
+        console.log(`Deleted old cover from S3: ${currentProj.cover}`);
+      } catch (s3Err) {
+        console.error("Failed to delete old image from S3:", s3Err);
+      }
+    }
+    const updatedUser = await User.findOneAndUpdate(
+      { "projectData._id": projectId },
+      { 
+        $set: { 
+          "projectData.$.cover": newCoverFilename 
+        }
+      },
+      { returnDocument: 'after' }
+    );
+    const updatedProject = updatedUser.projectData.id(projectId);
+    await User.updateMany(
+      { "projectData._id": projectId },
+      { 
+        $set: { "projectData.$.cover": newCoverFilename }
+      }
+    );
+    res.json(updatedProject);
+  } catch (err) {
+    console.error("Project Cover Update Error:", err);
+    res.status(500).json({ msg: "Cover update failed" });
+  }
+});
+
 /* ================= ADD PRODUCT (FINAL FIX) ================= */
 
 app.post("/addProduct/:id", upload.single("image"), async (req, res) => {
