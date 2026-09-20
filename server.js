@@ -4224,11 +4224,15 @@ app.put("/updateProject/:projectId", async (req, res) => {
 app.get("/searchUser", async (req, res) => {
   const { phone } = req.query;
   try {
-    // Phone number partial match panna regex use pannalaam
-    const users = await User.find({ 
-      phone: { $regex: phone, $options: "i" } 
-    }).limit(3);
-    res.json(users);
+    if (!phone || phone.length < 3) {
+      return res.json([]);
+    }
+    const users = await User.find({
+      phone: { $regex: phone, $options: "i" }
+    })
+      .sort({ phone: 1 })
+      .limit(20);
+    res.json(users.slice(0, 20));
   } catch (err) {
     res.status(500).json({ msg: "Search failed" });
   }
