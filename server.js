@@ -1025,43 +1025,73 @@ app.put("/updateProjectCover/:projectId", upload.single("cover"), async (req, re
   try {
     const projectId = req.params.projectId;
     if (!req.file) {
-      return res.status(400).json({ msg: "No image file provided" });
+      return res.status(400).json({
+        msg: "No image file provided"
+      });
     }
-    const fullKey = req.file.key;
-    const newCoverFilename = path.basename(fullKey);
-    const existingUserDoc = await User.findOne({ "projectData._id": projectId });
+    const newCoverFilename = path.basename(req.file.key);
+    const existingUserDoc = await User.findOne({
+      "projectData._id": projectId
+    });
     if (!existingUserDoc) {
-      return res.status(404).json({ msg: "Project not found" });
+      return res.status(404).json({
+        msg: "Project not found"
+      });
     }
     const currentProj = existingUserDoc.projectData.id(projectId);
-    if (currentProj && currentProj.cover && currentProj.cover !== newCoverFilename) {
-      try {
-        await deleteOldImageFromS3(currentProj.cover);
-        console.log(`Deleted old cover from S3: ${currentProj.cover}`);
-      } catch (s3Err) {
-        console.error("Failed to delete old image from S3:", s3Err);
-      }
+    if (!currentProj) {
+      return res.status(404).json({
+        msg: "Project not found"
+      });
     }
+    const oldCover = currentProj.cover;
     const updatedUser = await User.findOneAndUpdate(
       { "projectData._id": projectId },
-      { 
-        $set: { 
-          "projectData.$.cover": newCoverFilename 
+      {
+        $set: {
+          "projectData.$.cover": newCoverFilename
         }
       },
-      { returnDocument: 'after' }
-    );
-    const updatedProject = updatedUser.projectData.id(projectId);
-    await User.updateMany(
-      { "projectData._id": projectId },
-      { 
-        $set: { "projectData.$.cover": newCoverFilename }
+      {
+        returnDocument: 'after'
       }
     );
-    res.json(updatedProject);
+    if (!updatedUser) {
+      return res.status(404).json({
+        msg: "Project update failed"
+      });
+    }
+    await User.updateMany(
+      {
+        "projectData._id": projectId
+      },
+      {
+        $set: {
+          "projectData.$.cover": newCoverFilename
+        }
+      }
+    );
+    if (
+      oldCover &&
+      oldCover !== newCoverFilename
+    ) {
+      try {
+        await deleteOldImageFromS3(oldCover);
+      } catch (s3Err) {
+        console.error("Failed to delete old cover:", s3Err);
+      }
+    }
+    const updatedProject = updatedUser.projectData.id(projectId);
+    res.json({
+      success: true,
+      project: updatedProject,
+      imageUrl: newCoverFilename
+    });
   } catch (err) {
     console.error("Project Cover Update Error:", err);
-    res.status(500).json({ msg: "Cover update failed" });
+    res.status(500).json({
+      msg: "Cover update failed"
+    });
   }
 });
 
