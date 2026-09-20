@@ -2855,7 +2855,7 @@ app.put("/multiAssignLabours", async (req, res) => {
 
 app.get("/getPublicLabours", async (req, res) => {
   try {
-    const { city, role, lat, lng, radius } = req.query; 
+    const { city, role, lat, lng } = req.query; 
     let filter = {
       role: "labour", 
       "supplyData.dispatchStatus": { $ne: "shipped" },
@@ -2879,9 +2879,7 @@ app.get("/getPublicLabours", async (req, res) => {
     const allLabours = await User.find(filter).lean();
     const searchLat = parseFloat(lat);
     const searchLng = parseFloat(lng);
-    const searchRadius = parseFloat(radius);
     const hasCoordinates = Number.isFinite(searchLat) && Number.isFinite(searchLng);
-    const hasRadius = Number.isFinite(searchRadius) && searchRadius > 0;
     const calculateDistance = (lat1, lon1, lat2, lon2) => {
       const earthRadiusKm = 6371;
       const dLat = ((lat2 - lat1) * Math.PI) / 180;
@@ -2910,14 +2908,6 @@ app.get("/getPublicLabours", async (req, res) => {
           : null
       };
     });
-    if (hasCoordinates && hasRadius) {
-      result = result.filter((labour) => {
-        if (labour.distance === null) {
-          return false;
-        }
-        return labour.distance <= searchRadius;
-      });
-    }
     if (hasCoordinates) {
       result.sort((a, b) => {
         if (a.distance === null && b.distance === null) {
