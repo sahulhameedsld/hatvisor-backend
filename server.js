@@ -4287,10 +4287,8 @@ app.get("/searchUser", async (req, res) => {
     }
     const users = await User.find({
       phone: { $regex: phone, $options: "i" }
-    })
-      .sort({ phone: 1 })
-      .limit(20);
-    res.json(users.slice(0, 20));
+    }).limit(3);
+    res.json(users);
   } catch (err) {
     res.status(500).json({ msg: "Search failed" });
   }
