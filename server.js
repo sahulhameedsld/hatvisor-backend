@@ -4157,7 +4157,6 @@ app.put("/updateProject/:projectId", async (req, res) => {
   try {
     const { projectName, propertyDetails, propertyOwners, supportSources, cover } = req.body;
     const projectId = req.params.projectId;
-
     if (cover) {
       const existingUserDoc = await User.findOne({ "projectData._id": projectId });
       if (existingUserDoc) {
@@ -4167,8 +4166,6 @@ app.put("/updateProject/:projectId", async (req, res) => {
         }
       }
     }
-
-    // 1. Fetch current project state before updating to track removed owners/support sources
     const currentVendorDoc = await User.findOne({ "projectData._id": projectId });
     if (!currentVendorDoc) {
       return res.status(404).json({ msg: "Project not found" });
@@ -4176,8 +4173,6 @@ app.put("/updateProject/:projectId", async (req, res) => {
     const currentProj = currentVendorDoc.projectData.id(projectId);
     const oldOwners = currentProj.propertyOwners || [];
     const oldSupports = currentProj.supportSources || [];
-
-    // 2. Perform the primary project update on the vendor document
     const user = await User.findOneAndUpdate(
       { "projectData._id": projectId },
       { 
@@ -4192,29 +4187,41 @@ app.put("/updateProject/:projectId", async (req, res) => {
       },
       { returnDocument: "after" }
     );
-
     const updatedProject = user.projectData.id(projectId);
-    const projectDataObject = {
-      _id: updatedProject._id,
-      projectName: updatedProject.projectName,
-      cover: updatedProject.cover,
-      propertyDetails: updatedProject.propertyDetails,
-      propertyOwners: updatedProject.propertyOwners,
-      supportSources: updatedProject.supportSources,
-      taskMedia: updatedProject.taskMedia
-    };
-
-    // 3. HANDLE PROPERTY OWNERS SYNC (Add to new, Remove from deleted)
     const newOwnerIds = (propertyOwners || []).map(o => o._id.toString());
     const oldOwnerIds = oldOwners.map(o => o._id.toString());
-
-    // Add project to newly added owners
     for (let owner of (propertyOwners || [])) {
-      await User.findByIdAndUpdate(owner._id, {
-        $addToSet: { projectData: projectDataObject }
-      });
+      const ownerIdStr = owner._id.toString();
+      if (oldOwnerIds.includes(ownerIdStr)) {
+        await User.updateOne(
+          { _id: owner._id, "projectData._id": projectId },
+          { 
+            $set: { 
+              "projectData.$.projectName": projectName,
+              "projectData.$.cover": updatedProject.cover,
+              "projectData.$.propertyDetails": updatedProject.propertyDetails,
+              "projectData.$.propertyOwners": propertyOwners,
+              "projectData.$.supportSources": supportSources
+            }
+          }
+        );
+      } else {
+        const ownerDataObject = {
+          _id: updatedProject._id,
+          projectId: updatedProject._id,
+          projectName: updatedProject.projectName,
+          cover: updatedProject.cover,
+          propertyDetails: updatedProject.propertyDetails,
+          propertyOwners: propertyOwners,
+          supportSources: supportSources,
+          taskMedia: updatedProject.taskMedia,
+          inProject: true
+        };
+        await User.findByIdAndUpdate(owner._id, {
+          $addToSet: { projectData: ownerDataObject }
+        });
+      }
     }
-    // Remove project from removed owners
     for (let oldId of oldOwnerIds) {
       if (!newOwnerIds.includes(oldId)) {
         await User.findByIdAndUpdate(oldId, {
@@ -4222,18 +4229,40 @@ app.put("/updateProject/:projectId", async (req, res) => {
         });
       }
     }
-
-    // 4. HANDLE SUPPORT SOURCES SYNC (Add to new, Remove from deleted)
     const newSupportIds = (supportSources || []).map(s => s._id.toString());
     const oldSupportIds = oldSupports.map(s => s._id.toString());
-
-    // Add project to newly added support sources
     for (let support of (supportSources || [])) {
-      await User.findByIdAndUpdate(support._id, {
-        $addToSet: { projectData: projectDataObject }
-      });
+      const supportIdStr = support._id.toString();
+      if (oldSupportIds.includes(supportIdStr)) {
+        await User.updateOne(
+          { _id: support._id, "projectData._id": projectId },
+          { 
+            $set: { 
+              "projectData.$.projectName": projectName,
+              "projectData.$.cover": updatedProject.cover,
+              "projectData.$.propertyDetails": updatedProject.propertyDetails,
+              "projectData.$.propertyOwners": propertyOwners,
+              "projectData.$.supportSources": supportSources
+            }
+          }
+        );
+      } else {
+        const supportDataObject = {
+          _id: updatedProject._id,
+          projectId: updatedProject._id,
+          projectName: updatedProject.projectName,
+          cover: updatedProject.cover,
+          propertyDetails: updatedProject.propertyDetails,
+          propertyOwners: propertyOwners,
+          supportSources: supportSources,
+          taskMedia: updatedProject.taskMedia,
+          inProject: false
+        };
+        await User.findByIdAndUpdate(support._id, {
+          $addToSet: { projectData: supportDataObject }
+        });
+      }
     }
-    // Remove project from removed support sources
     for (let oldId of oldSupportIds) {
       if (!newSupportIds.includes(oldId)) {
         await User.findByIdAndUpdate(oldId, {
@@ -4241,7 +4270,6 @@ app.put("/updateProject/:projectId", async (req, res) => {
         });
       }
     }
-
     res.json(updatedProject);
   } catch (err) {
     console.error("Project Update Error:", err);
