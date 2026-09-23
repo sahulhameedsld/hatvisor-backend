@@ -1609,6 +1609,122 @@ app.delete("/deleteUser/:id", async (req, res) => {
         updatePipeline: true
       }
     );
+    /* ---------- Delete Related MongoDB Data ---------- */
+    await Attendance.deleteMany({
+      $or: [
+        { labourId: userObjectId },
+        { vendorId: userId }
+      ]
+    });
+    await SavedCache.deleteMany({
+      userId: userObjectId
+    });
+    await Notification.deleteMany({
+      $or: [
+        { recipientId: userObjectId },
+        { senderId: userObjectId }
+      ]
+    });
+    await Message.deleteMany({
+      $or: [
+        { senderId: userId },
+        { receiverId: userId }
+      ]
+    });
+    const userGroups = await Group.find({
+      $or: [
+        { vendorId: userObjectId },
+        { "members.userId": userObjectId }
+      ]
+    }).select("_id");
+    const groupIds = userGroups.map(group => group._id);
+    if (groupIds.length > 0) {
+      await GroupMessage.deleteMany({
+        $or: [
+          { groupId: { $in: groupIds } },
+          { senderId: userObjectId }
+        ]
+      });
+      await Group.deleteMany({
+        _id: { $in: groupIds }
+      });
+    } else {
+      await GroupMessage.deleteMany({
+        senderId: userObjectId
+      });
+    }
+    const userProjectIds = Array.isArray(user.projectData)
+      ? user.projectData
+          .map(project => project?.projectId)
+          .filter(Boolean)
+      : [];
+    const projectIds = Array.isArray(user.projectData)
+      ? user.projectData
+          .map(project => project?._id)
+          .filter(Boolean)
+      : [];
+    const allProjectGroupIds = [
+      ...new Set(
+        [
+          ...userProjectIds,
+          ...projectIds
+        ].map(id => String(id))
+      )
+    ];
+    const projectGroups = await ProjectGroup.find({
+      $or: [
+        {
+          members: {
+            $elemMatch: {
+              userId: userObjectId
+            }
+          }
+        },
+        {
+          projectId: {
+            $in: allProjectGroupIds
+          }
+        }
+      ]
+    }).select("_id projectId");
+    const projectGroupIds = projectGroups.map(
+      group => group._id
+    );
+    if (projectGroupIds.length > 0) {
+      await ProjectGroupMessage.deleteMany({
+        $or: [
+          {
+            projectId: {
+              $in: allProjectGroupIds
+            }
+          },
+          {
+            senderId: userObjectId
+          }
+        ]
+      });
+      await ProjectGroup.deleteMany({
+        _id: {
+          $in: projectGroupIds
+        }
+      });
+    } else {
+      await ProjectGroupMessage.deleteMany({
+        senderId: userObjectId
+      });
+      await ProjectGroup.updateMany(
+        {
+          "members.userId": userObjectId
+        },
+        {
+          $pull: {
+            members: {
+              userId: userObjectId
+            }
+          }
+        }
+      );
+    }
     /* ---------- Company Cleanup ---------- */
     if (user.role === "company") {
       if (
@@ -1618,6 +1734,7 @@ app.delete("/deleteUser/:id", async (req, res) => {
         const projectIds = user.projectData
           .map(project => project?._id)
           .filter(Boolean);
+
         const customProjectIds = user.projectData
           .map(project => project?.projectId)
           .filter(Boolean);
