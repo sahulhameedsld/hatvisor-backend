@@ -26,6 +26,8 @@ const razorpay = new Razorpay({
 const fs = require("fs");
 const path = require("path");
 const cron = require("node-cron");
+const crypto = require("crypto");
+const PDFDocument = require("pdfkit");
 
 const s3 = new S3Client({
   region: process.env.AWS_REGION,
@@ -774,6 +776,60 @@ const UserSchema = new mongoose.Schema({
 
 
 const User = mongoose.model("User", UserSchema);
+
+/* ================= SUBSCRIPTION PAYMENT HISTORY ================= */
+
+const SubscriptionPaymentSchema = new mongoose.Schema({
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    required: true
+  },
+
+  plan: {
+    type: String,
+    required: true
+  },
+
+  amount: {
+    type: Number,
+    required: true
+  },
+
+  paymentId: {
+    type: String,
+    required: true,
+    unique: true
+  },
+
+  orderId: {
+    type: String,
+    required: true
+  },
+
+  paidAt: {
+    type: Date,
+    default: Date.now
+  },
+
+  subscriptionStart: {
+    type: Date,
+    required: true
+  },
+
+  subscriptionEnd: {
+    type: Date,
+    required: true
+  },
+
+  invoiceNumber: {
+    type: String,
+    required: true,
+    unique: true
+  }
+});
+
+const SubscriptionPayment = mongoose.model("SubscriptionPayment", SubscriptionPaymentSchema);
 
 /* ================= MSG SCHEMA ================= */
 
@@ -6521,10 +6577,21 @@ app.get("/checkSubscription/:userId", async (req, res) => {
 /* ================= 7.2 CREATE RAZORPAY ORDER ================= */
 
 app.post("/createOrder", async (req, res) => {
-  console.log("===== CREATE ORDER API HIT =====");
-  console.log(req.body);
   try {
     const { userId, plan } = req.body;
+    if (!userId || !plan) {
+      return res.status(400).json({
+        success: false,
+        message: "User ID and plan are required"
+      });
+    }
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
     let amount = 0;
     switch (plan) {
       case "6months":
@@ -6539,27 +6606,422 @@ app.post("/createOrder", async (req, res) => {
           message: "Invalid plan"
         });
     }
+    if (
+      user.subscription?.payment === true &&
+      user.subscription?.subscriptionEnd &&
+      new Date(user.subscription.subscriptionEnd) > new Date()
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Your current subscription is still active."
+      });
+    }
     const options = {
       amount: amount * 100,
       currency: "INR",
       receipt: `receipt_${Date.now()}`,
       notes: {
-        userId,
+        userId: String(userId),
         plan
       }
     };
     const order = await razorpay.orders.create(options);
+    res.json({ success: true, order, key: process.env.RAZORPAY_KEY_ID });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Unable to create order" });
+  }
+});
+
+/* ================= 7.3 VERIFY RAZORPAY PAYMENT ================= */
+
+app.post("/verifyPayment", async (req, res) => {
+  try {
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature, plan, userId } = req.body;
+    if ( !razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !plan || !userId ) {
+      return res.status(400).json({ success: false, message: "Missing payment details" });
+    }
+    let user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+    if (user.role !== "company" && user.usedBy) {
+      const companyUser = await User.findById(user.usedBy);
+      if (companyUser) {
+        user = companyUser;
+      }
+    }
+    const expectedSignature = crypto
+      .createHmac( "sha256", process.env.RAZORPAY_KEY_SECRET )
+      .update( `${razorpay_order_id}|${razorpay_payment_id}` )
+      .digest("hex");
+    if ( expectedSignature !== razorpay_signature ) {
+      return res.status(400).json({ success: false, message: "Invalid payment signature" });
+    }
+    let amount = 0;
+    let durationDays = 0;
+    switch (plan) {
+      case "6months":
+        amount = 3999;
+        durationDays = 182;
+        break;
+      case "yearly":
+        amount = 6999;
+        durationDays = 365;
+        break;
+      default:
+        return res.status(400).json({ success: false, message: "Invalid subscription plan" });
+    }
+    const existingPayment = await SubscriptionPayment.findOne({ paymentId: razorpay_payment_id });
+    if (existingPayment) {
+      return res.json({
+        success: true,
+        message: "Payment already verified",
+        payment: existingPayment
+      });
+    }
+    const subscriptionStart = new Date();
+    const subscriptionEnd = new Date(
+      subscriptionStart.getTime() +
+      durationDays *
+        24 *
+        60 *
+        60 *
+        1000
+    );
+    const invoiceCount = await SubscriptionPayment.countDocuments();
+    const invoiceNumber = `HAT-INV-${String(invoiceCount + 1).padStart(5, "0")}`;
+    user.subscription = {
+      ...(user.subscription?.toObject
+        ? user.subscription.toObject()
+        : user.subscription || {}),
+      plan,
+      payment: true,
+      subscriptionStart,
+      subscriptionEnd,
+      paymentId: razorpay_payment_id,
+      orderId: razorpay_order_id,
+      paused: false,
+      pausedAt: null,
+      totalPausedMs: 0
+    };
+    await user.save();
+    const payment = new SubscriptionPayment({
+        userId: user._id,
+        plan,
+        amount,
+        paymentId: razorpay_payment_id,
+        orderId: razorpay_order_id,
+        paidAt: new Date(),
+        subscriptionStart,
+        subscriptionEnd,
+        invoiceNumber
+      });
+    await payment.save();
     res.json({
       success: true,
-      order,
-      key: process.env.RAZORPAY_KEY_ID
+      message: "Payment verified successfully",
+      payment: {
+        _id: payment._id,
+        userId: payment.userId,
+        plan: payment.plan,
+        amount: payment.amount,
+        paymentId: payment.paymentId,
+        orderId: payment.orderId,
+        paidAt: payment.paidAt,
+        subscriptionStart: payment.subscriptionStart,
+        subscriptionEnd: payment.subscriptionEnd,
+        invoiceNumber: payment.invoiceNumber
+      }
     });
   } catch (err) {
-    console.log(err);
-    res.status(500).json({
-      success: false,
-      message: "Unable to create order"
+    res.status(500).json({ success: false, message: "Payment verification failed" });
+  }
+});
+
+/* ================= 7.4 SUBSCRIPTION PAYMENT HISTORY ================= */
+
+app.get("/subscriptionHistory/:userId", async (req, res) => {
+  try {
+    let user = await User.findById(req.params.userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+    if (user.role !== "company" && user.usedBy) {
+      const companyUser = await User.findById(user.usedBy);
+      if (companyUser) {
+        user = companyUser;
+      }
+    }
+    const payments = await SubscriptionPayment
+      .find({
+        userId: user._id
+      })
+      .sort({
+        paidAt: -1
+      })
+      .lean();
+    res.json({ success: true, payments });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Unable to fetch payment history" });
+  }
+});
+
+/* ================= 7.5 GENERATE SUBSCRIPTION INVOICE ================= */
+
+app.get("/invoice/:paymentId", async (req, res) => {
+  try {
+    const payment = await SubscriptionPayment.findOne({
+      paymentId: req.params.paymentId
     });
+    if (!payment) {
+      return res.status(404).json({ success: false, message: "Payment not found" });
+    }
+    const user = await User.findById(payment.userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: "Subscriber not found" });
+    }
+    res.setHeader( "Content-Type", "application/pdf" );
+    res.setHeader( "Content-Disposition", `inline; filename="${payment.invoiceNumber}.pdf"` );
+    const doc = new PDFDocument({
+      size: "A4",
+      margin: 45
+    });
+    doc.pipe(res);
+    const letterheadPath = path.join( __dirname, "invoice-letterhead.png" );
+    const logoPath = path.join( __dirname, "invoice-logo.png" );
+    if (fs.existsSync(letterheadPath)) {
+      doc.image(
+        letterheadPath,
+        0,
+        0,
+        {
+          width: 595.28,
+          height: 841.89
+        }
+      );
+    } else if (fs.existsSync(logoPath)) {
+      doc.image(
+        logoPath,
+        45,
+        40,
+        {
+          fit: [130, 70]
+        }
+      );
+    } else {
+      doc
+        .fontSize(24)
+        .font("Helvetica-Bold")
+        .text(
+          "HATVISOR",
+          45,
+          50
+        );
+    }
+    const topPosition =
+      fs.existsSync(letterheadPath)
+        ? 180
+        : 130;
+      doc
+        .fontSize(22)
+        .font("Helvetica-Bold")
+        .text(
+          "SUBSCRIPTION INVOICE",
+          45,
+          topPosition
+        );
+      doc
+        .fontSize(10)
+        .font("Helvetica")
+        .fillColor("#555555")
+        .text(
+          `Invoice No: ${payment.invoiceNumber}`,
+          45,
+          topPosition + 35
+        );
+      doc.text(
+        `Invoice Date: ${new Date(
+          payment.paidAt
+        ).toLocaleDateString("en-IN")}`,
+        45,
+        topPosition + 50
+      );
+      doc.fillColor("#000000");
+    const customerTop = topPosition + 100;
+      doc
+        .fontSize(12)
+        .font("Helvetica-Bold")
+        .text(
+          "Subscriber Details",
+          45,
+          customerTop
+        );
+      doc
+        .fontSize(11)
+        .font("Helvetica")
+        .text(
+          `Name: ${user.name || "-"}`,
+          45,
+          customerTop + 25
+        );
+      doc.text(
+        `Company Name: ${user.companyName || "-"}`,
+        45,
+        customerTop + 42
+      );
+      doc.text(
+        `Company Phone: ${user.companyPhone || user.phone || "-"}`,
+        45,
+        customerTop + 59
+      );
+    const tableTop = customerTop + 105;
+      const x1 = 45;
+      const x2 = 95;
+      const x3 = 335;
+      const x4 = 495;
+      doc
+        .rect(
+          x1,
+          tableTop,
+          505,
+          32
+        )
+        .fill("#0F766E");
+      doc
+        .fillColor("#ffffff")
+        .fontSize(10)
+        .font("Helvetica-Bold")
+        .text(
+          "S.No",
+          x1 + 8,
+          tableTop + 10
+        );
+      doc.text(
+        "Subscription",
+        x2 + 8,
+        tableTop + 10
+      );
+      doc.text(
+        "Duration",
+        x3 + 8,
+        tableTop + 10
+      );
+      doc.text(
+        "Total",
+        x4 + 8,
+        tableTop + 10
+      );
+      doc
+        .fillColor("#000000")
+        .font("Helvetica")
+        .fontSize(10);
+    const planName =
+      payment.plan === "6months"
+        ? "6 Months Subscription"
+        : "1 Year Subscription";
+    const duration =
+      payment.plan === "6months"
+        ? "182 Days"
+        : "365 Days";
+    const rowTop = tableTop + 32;
+      doc
+        .rect(
+          x1,
+          rowTop,
+          505,
+          42
+        )
+        .stroke("#dddddd");
+      doc.text(
+        "1",
+        x1 + 8,
+        rowTop + 14
+      );
+      doc.text(
+        planName,
+        x2 + 8,
+        rowTop + 14
+      );
+      doc.text(
+        duration,
+        x3 + 8,
+        rowTop + 14
+      );
+      doc.text(
+        `Rs. ${payment.amount.toLocaleString(
+          "en-IN"
+        )}`,
+        x4 + 8,
+        rowTop + 14
+      );
+    const detailsTop = rowTop + 80;
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(11)
+        .text(
+          "Payment Details",
+          45,
+          detailsTop
+        );
+      doc
+        .font("Helvetica")
+        .fontSize(10)
+        .text(
+          `Payment ID: ${payment.paymentId}`,
+          45,
+          detailsTop + 25
+        );
+      doc.text(
+        `Order ID: ${payment.orderId}`,
+        45,
+        detailsTop + 42
+      );
+      doc.text(
+        `Subscription Start: ${new Date(
+          payment.subscriptionStart
+        ).toLocaleDateString("en-IN")}`,
+        45,
+        detailsTop + 59
+      );
+      doc.text(
+        `Subscription End: ${new Date(
+          payment.subscriptionEnd
+        ).toLocaleDateString("en-IN")}`,
+        45,
+        detailsTop + 76
+      );
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(14)
+        .text(
+          `Total Paid: Rs. ${payment.amount.toLocaleString(
+            "en-IN"
+          )}`,
+          45,
+          detailsTop + 125
+        );
+      doc
+        .font("Helvetica")
+        .fontSize(9)
+        .fillColor("#777777")
+        .text(
+          "Payment Status: PAID",
+          45,
+          detailsTop + 155
+        );
+      doc.text(
+        "Thank you for subscribing to Hatvisor.",
+        45,
+        detailsTop + 185
+      );
+      doc.end();
+  } catch (err) {
+    if (!res.headersSent) {
+      res.status(500).json({ success: false, message: "Unable to generate invoice" });
+    }
   }
 });
 
