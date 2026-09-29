@@ -2359,20 +2359,26 @@ app.get('/download-file/:filename', async (req, res) => {
 
 app.post("/sendProjectGroupMessage", upload.single("attachment"), async (req, res) => {
   try {
-    const { senderId, projectId, message, replyTo } = req.body;
+    const { senderId, projectId, message, replyTo, forwardAttachmentFilename, isForwarded, forwardedBy, originalSenderId, originalMessageId } = req.body;
     if (!senderId || !projectId) {
       return res.status(400).json({ message: "senderId and projectId are required!" });
     }
     let attachmentData = { filename: "", attachmentSetPath: "uploads/temp" };
     if (req.file) {
       attachmentData.filename = req.file.key;
+    } else if (forwardAttachmentFilename) {
+      attachmentData.filename = forwardAttachmentFilename;
     }
     const msg = new ProjectGroupMessage({
       senderId,
       projectId,
       message: message || "",
       attachments: attachmentData,
-      replyTo: replyTo || null
+      replyTo: replyTo || null,
+      isForwarded: isForwarded === "true" || isForwarded === true,
+      forwardedBy: forwardedBy || null,
+      originalSenderId: originalSenderId || null,
+      originalMessageId: originalMessageId || null
     });
     await msg.save();
     const populated = await ProjectGroupMessage.findById(msg._id)

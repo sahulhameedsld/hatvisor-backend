@@ -36,6 +36,24 @@ const ProjectGroupMessageSchema = new mongoose.Schema({
         type: Boolean,
         default: false
     },
+    isForwarded: {
+        type: Boolean,
+        default: false
+    },
+    forwardedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+        default: null
+    },
+    originalSenderId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+        default: null
+    },
+    originalMessageId: {
+        type: mongoose.Schema.Types.ObjectId,
+        default: null
+    },
     seenBy: [{
         type: mongoose.Schema.Types.ObjectId,
         ref: "User"
