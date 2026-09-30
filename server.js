@@ -427,18 +427,26 @@ const UserSchema = new mongoose.Schema({
   email: { type: String, lowercase: true },
 
   /* EMPLOYEE Fields in UserSchema */
+  sickLeave: {
+    type: Number,
+    default: 0
+  },
+  casualLeave: {
+    type: Number,
+    default: 0
+  },
   sickLeaves: {
     type: [Object],
-    default: [] 
+    default: []
   },
-
   casualLeaves: {
     type: [Object],
     default: []
   },
-
-  weekOff: [String],
-
+  weekOff: {
+    type: [String],
+    default: []
+  },
   generalLeaves: [
     {
       startDate: { type: Date },
@@ -3408,9 +3416,9 @@ app.put("/onboardEmployee/:id", async (req, res) => {
     emp.createdBy = vendorId;
     emp.designation = designation;
     emp.subRole = subRole;
-    emp.casualLeave = casualLeave;
-    emp.sickLeave = sickLeave;
-    emp.weekOff = weekOff;
+    emp.casualLeave = Number(casualLeave) || 0;
+    emp.sickLeave = Number(sickLeave) || 0;
+    emp.weekOff = Array.isArray(weekOff) ? weekOff : [];
     emp.projectData = vendor.projectData || [];
     emp.supplyData = vendor.supplyData || [];
     emp.importData = vendor.importData || [];
