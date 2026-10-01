@@ -3359,12 +3359,19 @@ app.put("/removeEmployee/:id", async (req, res) => {
     const oldCompanyId = emp.usedBy;
     emp.usedBy = null;              // company remove
     emp.createdBy = emp._id;        // self owner
-    emp.subRole = "executive";      // default role
+    emp.subRole = "";      // default role
+    emp.sickLeave = "";
+    emp.casualLeave = "";
     emp.projectData = [];
     emp.supplyData = [];
     emp.importData = [];
     emp.productionData = [];
     emp.materialData = [];
+    emp.products = [];
+    emp.sickLeaves = [];
+    emp.casualLeaves = [];
+    emp.weekOff = [];
+    emp.generalLeaves = [];    
     await emp.save();
     if (oldCompanyId) {
       const company = await User.findById(oldCompanyId);
@@ -4056,7 +4063,7 @@ app.delete("/deleteProduction/:vendorId/:prodId", async (req, res) => {
 app.post("/toggleEnterprisePost/:vendorId/:projectId", async (req, res) => {
   try {
     const { vendorId, projectId } = req.params;
-    const { feedDescription } = req.body;
+    const { feedDescription, tags } = req.body;
     const user = await User.findById(vendorId);
     if (!user) return res.status(404).json({ msg: "Vendor account not found" });
     const projectIndex = user.projectData.findIndex(p => String(p._id) === String(projectId));
@@ -5317,6 +5324,8 @@ app.get("/getGlobalHomeFeed", async (req, res) => {
             projectId: project._id,
             projectName: project.projectName,
             feedDescription: project.feedDescription || "",
+            tags: project.tags || [],
+            postedAt: project.postedAt,
             taskMedia: project.taskMedia,
             propertyDetails: project.propertyDetails,
             likedByFeed: project.likedByFeed || [],
