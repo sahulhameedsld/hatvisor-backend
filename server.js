@@ -5330,6 +5330,9 @@ app.get("/getGlobalHomeFeed", async (req, res) => {
             propertyDetails: project.propertyDetails,
             likedByFeed: project.likedByFeed || [],
             savedByFeed: project.savedByFeed || [],
+            isSavedByUser: (project.savedByFeed || []).some(
+              savedUserId => String(savedUserId) === String(userId)
+            ),
             likeCount: project.likeCount || 0,
             distanceFromUser: computedDistance,
             companyInfo: {
@@ -5360,52 +5363,81 @@ app.get("/getGlobalHomeFeed", async (req, res) => {
 
 app.post("/handleFeedAction/:actionType", async (req, res) => {
   try {
-    const { actionType } = req.params; // "like" or "save"
+    const { actionType } = req.params;
     const { vendorId, projectId, currentUserId, currentUserName, feedDescription } = req.body;
     const vendor = await User.findById(vendorId);
-    if (!vendor) return res.status(404).json({ msg: "Root company entry invalid" });
+    if (!vendor) {
+      return res.status(404).json({ msg: "Root company entry invalid" });
+    }
     const proj = vendor.projectData.id(projectId);
-    if (!proj) return res.status(404).json({ msg: "Project array element out of range buddy" });
-    
-    // === 🔴 LIKE PIPELINE HANDLING ===
+    if (!proj) {
+      return res.status(404).json({ msg: "Project array element out of range buddy" });
+    }
     if (actionType === "like") {
-      if (!proj.likedByFeed) proj.likedByFeed = [];
-      const index = proj.likedByFeed.findIndex(u => String(u.userId) === String(currentUserId));
+      if (!proj.likedByFeed) {
+        proj.likedByFeed = [];
+      }
+      const index = proj.likedByFeed.findIndex(
+        u => String(u.userId) === String(currentUserId)
+      );
       const isVendorHimself = String(vendorId) === String(currentUserId);
       let likingUser;
       if (isVendorHimself) {
         likingUser = vendor;
-        } else {
+      } else {
         likingUser = await User.findById(currentUserId);
-        if (!likingUser) return res.status(404).json({ msg: "Liking user profile not found buddy" });
+        if (!likingUser) {
+          return res.status(404).json({ msg: "Liking user profile not found buddy" });
+        }
       }
-      if (!likingUser.likedProjects) likingUser.likedProjects = [];
-      const userProjectIndex = likingUser.likedProjects.findIndex(p => String(p.projectId) === String(projectId));
+
+      if (!likingUser.likedProjects) {
+        likingUser.likedProjects = [];
+      }
+      const userProjectIndex = likingUser.likedProjects.findIndex(
+        p => String(p.projectId) === String(projectId)
+      );
       if (index === -1) {
-        proj.likedByFeed.push({ userId: currentUserId, userName: currentUserName });
+        proj.likedByFeed.push({
+          userId: currentUserId,
+          userName: currentUserName
+        });
         proj.likeCount = (proj.likeCount || 0) + 1;
         if (userProjectIndex === -1) {
-          likingUser.likedProjects.push({ projectId: projectId, liked: true });
+          likingUser.likedProjects.push({
+            projectId: projectId,
+            liked: true
+          });
         } else {
           likingUser.likedProjects[userProjectIndex].liked = true;
         }
-        // 🔔 FRESH NOTIFICATION INTEGRATION
         if (!isVendorHimself) {
-          const associatedUsers = await User.find({ "projectData.projectId": projectId });
-          const excludedSupportIds = (proj.supportSources || []).map(sup => String(sup._id || sup.id));
+          const associatedUsers = await User.find({
+            "projectData.projectId": projectId
+          });
+          const excludedSupportIds =
+            (proj.supportSources || []).map(
+              sup => String(sup._id || sup.id)
+            );
           for (let userNode of associatedUsers) {
             const userIdStr = String(userNode._id);
-            if (userIdStr === String(currentUserId)) continue;
-            if (userNode.role === "labour") continue;
-            if (excludedSupportIds.includes(userIdStr)) continue;
+            if (
+              userIdStr === String(currentUserId)
+            ) continue;
+            if (
+              userNode.role === "labour"
+            ) continue;
+            if (
+              excludedSupportIds.includes(userIdStr)
+            ) continue;
             const isTargetVendor = userIdStr === String(vendorId);
             const isVendorEmployee = String(userNode.usedBy) === String(vendorId);
             if (isTargetVendor || isVendorEmployee) {
               await triggerNotification({
-                recipientId: vendorId,              // Project Owner gets the alert
-                senderId: currentUserId,           // User who liked
-                senderName: currentUserName,       // Explicitly tracking who liked it buddy!
-                senderPic: likingUser.profilePic || "", 
+                recipientId: vendorId,
+                senderId: currentUserId,
+                senderName: currentUserName,
+                senderPic: likingUser.profilePic || "",
                 type: "feed_like",
                 title: "🔥 Public Feed Liked",
                 message: `${currentUserName} left a reaction badge on your public project feed: "${proj.projectName}"`,
@@ -5418,7 +5450,10 @@ app.post("/handleFeedAction/:actionType", async (req, res) => {
         proj.likedByFeed.splice(index, 1);
         proj.likeCount = Math.max(0, (proj.likeCount || 1) - 1);
         if (userProjectIndex !== -1) {
-          likingUser.likedProjects[userProjectIndex].liked = false;
+          likingUser
+            .likedProjects[userProjectIndex]
+            .liked = false;
+
         }
       }
       if (isVendorHimself) {
@@ -5431,107 +5466,120 @@ app.post("/handleFeedAction/:actionType", async (req, res) => {
         vendor.markModified("projectData");
         await vendor.save();
       }
-      return res.json({ success: true, msg: "Like toggled successfully buddy", likeCount: proj.likeCount, likedByFeed: proj.likedByFeed });
+      return res.json({
+        success: true,
+        msg: "Like toggled successfully buddy",
+        likeCount: proj.likeCount,
+        likedByFeed: proj.likedByFeed
+      });
     }
-    // === 💾 SAVE SNAPSHOT PIPELINE HANDLING ===
     if (actionType === "save") {
-      const existingCache = await SavedCache.findOne({ projectId: projectId, userId: currentUserId });
+      const existingCache = await SavedCache.findOne({
+        projectId: projectId,
+        userId: currentUserId
+      });
       if (existingCache) {
-        if (existingCache.taskMedia) {
-          for (const view of Object.values(existingCache.taskMedia)) {
-            if (view && view.url) {
-              const fileNameWithFolder = view.url.includes("amazonaws.com") ? view.url.split(".com/")[1] : view.url;
-              try {
-                  const delCommand = new DeleteObjectCommand({
-                  Bucket: process.env.AWS_BUCKET_NAME,
-                  Key: fileNameWithFolder,
-                });
-                await s3.send(delCommand);
-                console.log(`Deleted cache file from S3 buddy: ${fileNameWithFolder}`);
-              } catch (unlinkErr) {
-                console.error("S3 file delete error buddy:", unlinkErr);
-              }
-            }
-          }
-        }
-        if (proj.savedByFeed) {
-          const vIdx = proj.savedByFeed.indexOf(currentUserId);
-          if (vIdx !== -1) {
-            proj.savedByFeed.splice(vIdx, 1);
-            vendor.markModified("projectData");
-            await vendor.save();
-          }
-        }
-        await SavedCache.deleteOne({ _id: existingCache._id });
-        return res.json({ success: true, isSaved: false, msg: "Unsaved and file cache dropped clean buddy!" });
-      } else {
-        console.log("Save triggered buddy! Freezing files to cache folder...");
-        if (!proj.savedByFeed) proj.savedByFeed = [];
-        proj.savedByFeed.push(currentUserId);
-        vendor.markModified("projectData");
-        await vendor.save();
-        const snapshotMedia = {};
-        const viewsList = ['frontView', 'backView', 'leftView', 'rightView', 'ceilingView', 'floorView'];
-        for (const view of viewsList) {
-          const originalFileData = proj.taskMedia?.[view];
-          if (originalFileData && originalFileData.url) {
-            const originalFileUrl = originalFileData.url;
-            const sourceKey = originalFileUrl.includes("amazonaws.com") ? originalFileUrl.split(".com/")[1] : originalFileUrl;
-            const extension = path.extname(sourceKey);
-            const cachedUniqueName = `uploads/cache/${Date.now()}-${currentUserId}-${Math.round(Math.random() * 1E9)}${extension}`;
-            try {
-              const getObjCmd = new GetObjectCommand({ Bucket: process.env.AWS_BUCKET_NAME, Key: sourceKey });
-              const s3Res = await s3.send(getObjCmd);
-              const chunks = [];
-              for await (const chunk of s3Res.Body) {
-                chunks.push(chunk);
-              }
-              const fileBuffer = Buffer.concat(chunks);
-              const putObjCmd = new PutObjectCommand({
-                Bucket: process.env.AWS_BUCKET_NAME,
-                Key: cachedUniqueName,
-                Body: fileBuffer,
-                ContentType: s3Res.ContentType || 'image/jpeg',
-                ACL: 'public-read'
-              });
-              await s3.send(putObjCmd);
-              const publicUrl = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${cachedUniqueName}`;
-              snapshotMedia[view] = {
-                url: publicUrl,
-                fileType: originalFileData.fileType || "image"
-              };
-            } catch (copyErr) {
-              console.error(`Error copying media for view ${view} to S3 cache:`, copyErr);
-              snapshotMedia[view] = { url: "", fileType: "image" };
-            }
-          } else {
-            snapshotMedia[view] = { url: "", fileType: "image" };
-          }
-        }
-        await SavedCache.create({
-          projectId: projectId,
-          userId: currentUserId,
-          savedByUserId: currentUserId,
-          companyInfo: {
-            _id: vendor._id,
-            name: vendor.companyName || vendor.name,
-            logo: vendor.companyLogo || vendor.profilePic,
-            phone: vendor.companyPhone || vendor.phone
-          },
-          projectName: proj.projectName,
-          feedDescription: feedDescription || proj.feedDescription || "",
-          likeCount: proj.likeCount !== undefined ? proj.likeCount : (proj.likedByFeed?.length || 0),
-          propertyDetails: proj.propertyDetails || {},
-          taskMedia: snapshotMedia, 
-          savedAt: new Date()
+        return res.json({ 
+          success: true, 
+          isSaved: true, 
+          alreadySaved: true,
+          msg: "Project already saved buddy!"
         });
-        return res.json({ success: true, isSaved: true, msg: "Physical files frozen to cache directory and database locked buddy!" });
       }
+      if (!proj.savedByFeed) {
+        proj.savedByFeed = [];
+      }
+      const alreadyTracked = proj.savedByFeed.some(
+        id => String(id) === String(currentUserId)
+      );
+      if (!alreadyTracked) {
+        proj.savedByFeed.push(currentUserId);
+      }
+      vendor.markModified("projectData");
+      await vendor.save();
+      const snapshotMedia = {};
+      const viewsList = ["frontView", "backView", "leftView", "rightView", "ceilingView", "floorView"];
+      for (const view of viewsList) {
+        const originalFileData = proj.taskMedia?.[view];
+        if (originalFileData && originalFileData.url) {
+          const originalFileUrl = originalFileData.url;
+          const sourceKey = originalFileUrl.includes("amazonaws.com")
+            ? originalFileUrl
+            .split(".com/")[1]
+            : originalFileUrl;
+          const extension = path.extname(sourceKey);
+          const cachedUniqueName = `uploads/cache/${Date.now()}-${currentUserId}-${Math.round(
+            Math.random() * 1E9
+          )}${extension}`;
+          try {
+            const getObjCmd = new GetObjectCommand({
+              Bucket: process.env.AWS_BUCKET_NAME,
+              Key: sourceKey
+            });
+            const s3Res = await s3.send(getObjCmd);
+            const chunks = [];
+            for await (const chunk of s3Res.Body) {
+              chunks.push(chunk);
+            }
+            const fileBuffer = Buffer.concat(chunks);
+            const putObjCmd = new PutObjectCommand({
+              Bucket: process.env.AWS_BUCKET_NAME,
+              Key: cachedUniqueName,
+              Body: fileBuffer,
+              ContentType: s3Res.ContentType || "image/jpeg",
+              ACL: "public-read"
+            });
+            await s3.send(putObjCmd);
+            const publicUrl = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${cachedUniqueName}`;
+            snapshotMedia[view] = {
+              url: publicUrl,
+              fileType: originalFileData.fileType || "image"
+            };
+          } catch (copyErr) {
+            console.error(`Error copying media for view ${view} to S3 cache:`, copyErr);
+            snapshotMedia[view] = {
+              url: "",
+              fileType: "image"
+            };
+          }
+        } else {
+          snapshotMedia[view] = {
+            url: "",
+            fileType: "image"
+          };
+        }
+      }
+      await SavedCache.create({
+        projectId: projectId,
+        userId: currentUserId,
+        savedByUserId: currentUserId,
+        companyInfo: {
+          _id: vendor._id,
+          name: vendor.companyName || vendor.name,
+          logo: vendor.companyLogo || vendor.profilePic,
+          phone: vendor.companyPhone || vendor.phone
+        },
+        projectName: proj.projectName,
+        feedDescription: feedDescription || proj.feedDescription || "",
+        likeCount: proj.likeCount !== undefined
+          ? proj.likeCount
+          : (proj.likedByFeed?.length || 0),
+        propertyDetails: proj.propertyDetails || {},
+        taskMedia: snapshotMedia,
+        savedAt: new Date()
+      });
+      return res.json({
+        success: true,
+        isSaved: true,
+        msg: "Physical files frozen to cache directory and database locked buddy!"
+      });
     }
-    res.status(400).json({ msg: "Invalid parameter action operation flow template routing" });
+    return res.status(400).json({
+      msg: "Invalid parameter action operation flow template routing"
+    });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ msg: "Action processing system crash" });
+    return res.status(500).json({msg: "Action processing system crash"});
   }
 });
 
