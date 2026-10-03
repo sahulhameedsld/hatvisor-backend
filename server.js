@@ -5583,6 +5583,76 @@ app.post("/handleFeedAction/:actionType", async (req, res) => {
   }
 });
 
+/* ================= 5.2.1. SAVED FEED UNSAVE ================= */
+
+app.delete("/removeSavedFeed/:userId/:projectId", async (req, res) => {
+  try {
+    const { userId, projectId } = req.params;
+    const existingCache = await SavedCache.findOne({
+      projectId: projectId,
+      $or: [
+        { userId: userId },
+        { savedByUserId: userId }
+      ]
+    });
+    if (!existingCache) {
+      return res.json({
+        success: true,
+        isSaved: false,
+        msg: "Saved post already removed buddy!"
+      });
+    }
+    if (existingCache.taskMedia) {
+      for (const view of Object.values(existingCache.taskMedia)) {
+        if (view && view.url) {
+          const fileNameWithFolder =
+            view.url.includes("amazonaws.com")
+              ? view.url.split(".com/")[1]
+              : view.url;
+          try {
+            const delCommand = new DeleteObjectCommand({
+              Bucket: process.env.AWS_BUCKET_NAME,
+              Key: fileNameWithFolder
+            });
+            await s3.send(delCommand);
+            console.log(`Deleted saved cache image buddy: ${fileNameWithFolder}`);
+          } catch (deleteErr) {
+            console.error("Saved cache S3 delete error buddy:", deleteErr);
+          }
+        }
+      }
+    }
+    const vendorId = existingCache.companyInfo?._id;
+    if (vendorId) {
+      const vendor = await User.findById(vendorId);
+      if (vendor) {
+        const proj = vendor.projectData.id(projectId);
+        if (proj && proj.savedByFeed) {
+          proj.savedByFeed = proj.savedByFeed.filter(
+            id => String(id) !== String(userId)
+          );
+          vendor.markModified("projectData");
+          await vendor.save();
+        }
+      }
+    }
+    await SavedCache.deleteOne({
+      _id: existingCache._id
+    });
+    return res.json({
+      success: true,
+      isSaved: false,
+      msg: "Post removed from Saved Feed successfully buddy!"
+    });
+  } catch (err) {
+    console.error("Saved Feed unsave error buddy:", err);
+    return res.status(500).json({
+      success: false,
+      msg: "Could not remove saved post buddy!"
+    });
+  }
+});
+
 /* ================= 5.3. HOME FEED SAVED CACHE EXTRACTOR ================= */
 
 app.get("/getUserSavedCacheFeed/:userId", async (req, res) => {
