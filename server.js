@@ -3460,6 +3460,31 @@ app.put("/onboardEmployee/:id", async (req, res) => {
     if (!emp) return res.status(404).json({ msg: "Not found" });
     const vendor = await User.findById(vendorId);
     if (!vendor) return res.status(404).json({ msg: "Vendor not found" });
+    let sharedProjectData = [];
+    if (vendor.projectData && vendor.projectData.length > 0) {
+      sharedProjectData = vendor.projectData.map(p => ({
+        projectId: p.projectId,
+        projectName: p.projectName,
+        cover: p.cover || "",
+        status: p.status || "onprogress",
+        inProject: true,
+        projectLabour: p.projectLabour || [],
+        propertyOwners: p.propertyOwners || [],
+        propertyDetails: p.propertyDetails || {},
+        supportSources: p.supportSources || [],
+        taskMedia: p.taskMedia || {
+          frontView: { url: "" }, backView: { url: "" }, leftView: { url: "" },
+          rightView: { url: "" }, ceilingView: { url: "" }, floorView: { url: "" }
+        },
+        likeCount: p.likeCount || 0,
+        isPublic: p.isPublic || false,
+        postedAt: p.postedAt || null
+      }));
+    }
+    const sharedSupplyData = vendor.supplyData || [];
+    const sharedImportData = vendor.importData || [];
+    const sharedProductionData = vendor.productionData || [];
+    const sharedMaterialData = vendor.materialData || [];
     // 🔥 MAIN LOGIC
     emp.usedBy = vendorId;
     emp.createdBy = vendorId;
@@ -3471,8 +3496,10 @@ app.put("/onboardEmployee/:id", async (req, res) => {
     emp.projectData = vendor.projectData || [];
     emp.supplyData = vendor.supplyData || [];
     emp.importData = vendor.importData || [];
+    emp.productionData = sharedProductionData;
+    emp.materialData = sharedMaterialData;
     await emp.save();
-    res.json({ msg: "Employee onboarded" });
+    res.json({ msg: "Employee onboarded successfully", emp });
   } catch (err) {
     res.status(500).json({ msg: "Error" });
   }
