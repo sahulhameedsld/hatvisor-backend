@@ -130,7 +130,12 @@ async function triggerNotification({ recipientId, senderId, senderName, senderPi
   try {
     if (!recipientId) return;
     const newNotif = new Notification({
-      recipientId,
+      recipients: [
+        {
+          userId: recipientId,
+          isRead: false
+        }
+      ],
       senderId,
       senderName,
       senderPic,
@@ -138,21 +143,33 @@ async function triggerNotification({ recipientId, senderId, senderName, senderPi
       title,
       message,
       projectId,
-      viewName,
-      isRead: false
+      viewName
     });
     await newNotif.save();
     const oldNotifications = await Notification.find({
-      recipientId: recipientId
+      "recipients.userId": recipientId
     })
     .sort({ createdAt: -1 })
     .skip(30)
     .select("_id");
     if (oldNotifications.length > 0) {
-      const oldIds = oldNotifications.map(item => item._id);
+      const oldIds = oldNotifications.map((item) => item._id);
+      await Notification.updateMany(
+        {
+          _id: { $in: oldIds },
+          "recipients.userId": recipientId
+        },
+        {
+          $pull: {
+            recipients: {
+              userId: recipientId
+            }
+          }
+        }
+      );
       await Notification.deleteMany({
         _id: { $in: oldIds },
-        recipientId: recipientId
+        recipients: { $size: 0 }
       });
     }
     console.log(`🔔 Notification Created Successfully in DB for User: ${recipientId} - Action Type: ${type}`);
@@ -5727,9 +5744,17 @@ app.get("/getUserSavedCacheFeed/:userId", async (req, res) => {
 app.get("/api/notifications/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
-    const items = await Notification.find({recipientId: userId})
+    const items = await Notification.find({"recipients.userId": userId})
       .sort({ createdAt: -1 })
-      .limit(30);
+      .limit(30)
+      .lean();
+    const formattedItems = items.map((item) => {
+      const recipient = item.recipients.find((r) => r.userId.toString() === userId.toString());
+      return {
+        ...item,
+        isRead: recipient ? recipient.isRead : false
+      };
+    });
     res.json({ success: true, notifications: items });
   } catch (err) {
     res.status(500).json({ success: false, message: "Failed parsing user notification lists" });
@@ -5742,17 +5767,31 @@ app.post("/api/notifications/markRead", async (req, res) => {
   try {
     const { userId } = req.body;
     if (!userId) {
-      return res.status(400).json({ success: false, message: "User ID is required" });
+      return res.status(400).json({
+        success: false,
+        message: "User ID is required"
+      });
     }
     await Notification.updateMany(
       {
-        recipientId: userId,
-        isRead: false
+        recipients: {
+          $elemMatch: {
+            userId: userId,
+            isRead: false
+          }
+        }
       },
       {
         $set: {
-          isRead: true
+          "recipients.$[recipient].isRead": true
         }
+      },
+      {
+        arrayFilters: [
+          {
+            "recipient.userId": userId
+          }
+        ]
       }
     );
     res.json({ success: true });
@@ -5769,8 +5808,20 @@ app.delete("/api/notifications/clearAll/:userId", async (req, res) => {
     if (!userId) {
       return res.status(400).json({ success: false, message: "User ID is required" });
     }
+    await Notification.updateMany(
+      {
+        "recipients.userId": userId
+      },
+      {
+        $pull: {
+          recipients: {
+            userId: userId
+          }
+        }
+      }
+    );
     await Notification.deleteMany({
-      recipientId: userId
+      recipients: { $size: 0 }
     });
     res.json({ success: true, message: "Notifications cleared successfully" });
   } catch (err) {
