@@ -1,30 +1,15 @@
 const mongoose = require("mongoose");
 
-const NotificationRecipientSchema = new mongoose.Schema(
-  {
-    userId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      required: true
-    },
-    isRead: {
-      type: Boolean,
-      default: false
-    }
-  },
-  {
-    _id: false
-  }
-);
-
 const NotificationSchema = new mongoose.Schema({
-  recipients: {
-    type: [NotificationRecipientSchema],
-    default: []
+  recipientId: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: "User", 
+    required: true,
+    index: true
   },
-  senderId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: "User"
+  senderId: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: "User" 
   },
   senderName: { type: String, default: "" },
   senderPic: { type: String, default: "" },
@@ -35,14 +20,10 @@ const NotificationSchema = new mongoose.Schema({
   },
   title: { type: String, required: true },
   message: { type: String, required: true },
-  projectId: { type: String, default: "" }, // Routing match purposes
-  viewName: { type: String, default: "" },  // inside taskMedia images tracking
-  createdAt: { type: Date, default: Date.now, index: true }
-});
-
-NotificationSchema.index({
-  "recipients.userId": 1,
-  createdAt: -1
+  projectId: { type: String, default: "" },
+  viewName: { type: String, default: "" },
+  isRead: { type: Boolean, default: false },
+  createdAt: { type: Date, default: Date.now }
 });
 
 module.exports = mongoose.model("Notification", NotificationSchema);
