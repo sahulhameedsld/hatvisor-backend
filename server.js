@@ -128,8 +128,14 @@ const deleteImageFromS3 = async (imageKey) => {
 
 async function triggerNotification({ recipientId, senderId, senderName, senderPic, type, title, message, projectId = "", viewName = "" }) {
   try {
+    if (!recipientId) return;
     const newNotif = new Notification({
-      recipientId,
+      recipients: [
+        {
+          userId: recipientId,
+          isRead: false
+        }
+      ],
       senderId,
       senderName,
       senderPic,
@@ -140,6 +146,32 @@ async function triggerNotification({ recipientId, senderId, senderName, senderPi
       viewName
     });
     await newNotif.save();
+    const oldNotifications = await Notification.find({
+      "recipients.userId": recipientId
+    })
+    .sort({ createdAt: -1 })
+    .skip(30)
+    .select("_id");
+    if (oldNotifications.length > 0) {
+      const oldIds = oldNotifications.map((item) => item._id);
+      await Notification.updateMany(
+        {
+          _id: { $in: oldIds },
+          "recipients.userId": recipientId
+        },
+        {
+          $pull: {
+            recipients: {
+              userId: recipientId
+            }
+          }
+        }
+      );
+      await Notification.deleteMany({
+        _id: { $in: oldIds },
+        recipients: { $size: 0 }
+      });
+    }
     console.log(`🔔 Notification Created Successfully in DB for User: ${recipientId} - Action Type: ${type}`);
   } catch (err) {
     console.error("❌ Notification Engine Insertion Failure:", err);
@@ -1683,11 +1715,21 @@ app.delete("/deleteUser/:id", async (req, res) => {
     await SavedCache.deleteMany({
       userId: userObjectId
     });
+    await Notification.updateMany({
+      "recipients.userId": userObjectId
+    },
+    {
+      $pull: {
+        recipients: {
+          userId: userObjectId
+        }
+      }
+    });
     await Notification.deleteMany({
-      $or: [
-        { recipientId: userObjectId },
-        { senderId: userObjectId }
-      ]
+      senderId: userObjectId
+    });
+    await Notification.deleteMany({
+      recipients: { $size: 0 }
     });
     await Message.deleteMany({
       $or: [
@@ -5583,7 +5625,7 @@ app.post("/handleFeedAction/:actionType", async (req, res) => {
   }
 });
 
-/* ================= 5.2.1. SAVED FEED UNSAVE ================= */
+/* ================= 5.3. SAVED FEED UNSAVE ================= */
 
 app.delete("/removeSavedFeed/:userId/:projectId", async (req, res) => {
   try {
@@ -5653,7 +5695,7 @@ app.delete("/removeSavedFeed/:userId/:projectId", async (req, res) => {
   }
 });
 
-/* ================= 5.3. HOME FEED SAVED CACHE EXTRACTOR ================= */
+/* ================= 5.4. HOME FEED SAVED CACHE EXTRACTOR ================= */
 
 app.get("/getUserSavedCacheFeed/:userId", async (req, res) => {
   try {
@@ -5697,28 +5739,93 @@ app.get("/getUserSavedCacheFeed/:userId", async (req, res) => {
   }
 });
 
-/* ================= 🔔 5.4. FETCH INDIVIDUAL HISTORICAL NOTIFICATIONS ROUTE ================= */
+/* ================= 🔔 5.5. FETCH INDIVIDUAL HISTORICAL NOTIFICATIONS ROUTE ================= */
 
 app.get("/api/notifications/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
-    const items = await Notification.find({ recipientId: userId })
+    const items = await Notification.find({"recipients.userId": userId})
       .sort({ createdAt: -1 })
-      .limit(50); // Kept layout compact
+      .limit(30)
+      .lean();
+    const formattedItems = items.map((item) => {
+      const recipient = item.recipients.find((r) => r.userId.toString() === userId.toString());
+      return {
+        ...item,
+        isRead: recipient ? recipient.isRead : false
+      };
+    });
     res.json({ success: true, notifications: items });
   } catch (err) {
     res.status(500).json({ success: false, message: "Failed parsing user notification lists" });
   }
 });
 
-/* ================= 🔔 5.5. BULK MARK NOTIFICATIONS AS READ ROUTE ================= */
+/* ================= 🔔 5.6. BULK MARK NOTIFICATIONS AS READ ROUTE ================= */
 
 app.post("/api/notifications/markRead", async (req, res) => {
   try {
     const { userId } = req.body;
-    await Notification.updateMany({ recipientId: userId, isRead: false }, { $set: { isRead: true } });
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: "User ID is required"
+      });
+    }
+    await Notification.updateMany(
+      {
+        recipients: {
+          $elemMatch: {
+            userId: userId,
+            isRead: false
+          }
+        }
+      },
+      {
+        $set: {
+          "recipients.$[recipient].isRead": true
+        }
+      },
+      {
+        arrayFilters: [
+          {
+            "recipient.userId": userId
+          }
+        ]
+      }
+    );
     res.json({ success: true });
   } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/* ================= 🔔 5.7. CLEAR ALL NOTIFICATIONS FOR INDIVIDUAL USER ================= */
+
+app.delete("/api/notifications/clearAll/:userId", async (req, res) => {
+  try {
+    const { userId } = req.params;
+    if (!userId) {
+      return res.status(400).json({ success: false, message: "User ID is required" });
+    }
+    await Notification.updateMany(
+      {
+        "recipients.userId": userId
+      },
+      {
+        $pull: {
+          recipients: {
+            userId: userId
+          }
+        }
+      }
+    );
+    await Notification.deleteMany({
+      recipients: { $size: 0 }
+    });
+    res.json({ success: true, message: "Notifications cleared successfully" });
+  } catch (err) {
+    console.error("❌ Clear All Notifications Error:", err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
