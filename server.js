@@ -11,6 +11,7 @@ const multer = require("multer");
 const cors = require("cors");
 const Attendance = require('./attendanceModle');
 const SavedCache = require("./models/SavedCache");
+const OrphanCache = require("./models/OrphanCache");
 const Notification = require("./models/Notification");
 const Group = require("./models/Group");
 const GroupMessage = require("./models/GroupMessage");
@@ -218,6 +219,118 @@ cron.schedule("0 * * * *", async () => {
     );
   }
 });
+
+/* ================= 24-HOUR S3 CACHE ASSETS FORCE CLEANUP ================= */
+
+const CACHE_PREFIX = "uploads/cache/";
+const CACHE_EXPIRY_MS = 24 * 60 * 60 * 1000;
+function getCacheKey(url) {
+  if (typeof url !== "string" || !url.trim()) {
+    return null;
+  }
+  try {
+    const value = url.trim();
+    const key = /^https?:\/\//i.test(value)
+      ? decodeURIComponent(new URL(value).pathname.slice(1))
+      : value.replace(/^\/+/, "");
+    return key.startsWith(CACHE_PREFIX) ? key : null;
+  } catch {
+    return null;
+  }
+}
+async function isCacheReferenced(key) {
+  const views = [
+    "frontView",
+    "backView",
+    "leftView",
+    "rightView",
+    "ceilingView",
+    "floorView"
+  ];
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const urlPattern = new RegExp(
+    `(?:^|/)${escaped}(?:\\?.*)?$`
+  );
+  const orConditions = views.map(view => ({
+    [`taskMedia.${view}.url`]: urlPattern
+  }));
+  const records = await SavedCache.find({
+    $or: orConditions
+  }).select("userId savedByUserId").lean();
+  if (!records.length) return false;
+  const userIds = records.flatMap(record =>
+    [record.userId, record.savedByUserId]
+      .filter(id => id && mongoose.isValidObjectId(id))
+  );
+  if (!userIds.length) return false;
+  return Boolean(
+    await User.exists({ _id: { $in: userIds } })
+  );
+}
+let cacheCleanupRunning = false;
+async function cleanupOrphanSavedCache() {
+  if (cacheCleanupRunning) return;
+  if (mongoose.connection.readyState !== 1) return;
+  cacheCleanupRunning = true;
+  try {
+    let continuationToken;
+    let scanned = 0;
+    let deleted = 0;
+    do {
+      const response = await s3.send(
+        new ListObjectsV2Command({
+          Bucket: process.env.AWS_BUCKET_NAME,
+          Prefix: CACHE_PREFIX,
+          ContinuationToken: continuationToken
+        })
+      );
+      for (const object of response.Contents || []) {
+        const key = object.Key;
+        if (!key || key === CACHE_PREFIX) continue;
+        scanned++;
+        if (await isCacheReferenced(key)) {
+          await OrphanCache.deleteOne({ s3Key: key });
+          continue;
+        }
+        const orphan = await OrphanCache.findOneAndUpdate(
+          { s3Key: key },
+          {
+            $setOnInsert: {
+              s3Key: key,
+              orphanedAt: new Date()
+            }
+          },
+          {
+            upsert: true,
+            returnDocument: "after"
+          }
+        );
+        const age = Date.now() - orphan.orphanedAt.getTime();
+        if (age < CACHE_EXPIRY_MS) continue;
+        if (await isCacheReferenced(key)) {
+          await OrphanCache.deleteOne({ s3Key: key });
+          continue;
+        }
+        await s3.send(new DeleteObjectCommand({
+          Bucket: process.env.AWS_BUCKET_NAME,
+          Key: key
+        }));
+        await OrphanCache.deleteOne({ s3Key: key });
+        deleted++;
+      }
+      continuationToken = response.IsTruncated
+        ? response.NextContinuationToken
+        : undefined;
+    } while (continuationToken);
+    console.log(`[SAVED CACHE CLEANUP] Scanned: ${scanned}, Deleted: ${deleted}`);
+  } catch (error) {
+    console.error("[SAVED CACHE CLEANUP]", error);
+  } finally {
+    cacheCleanupRunning = false;
+  }
+}
+cron.schedule("0 * * * *", cleanupOrphanSavedCache);
+
 
 /* ================= TIME FRAME ================= */
 
@@ -5658,11 +5771,8 @@ app.delete("/removeSavedFeed/:userId/:projectId", async (req, res) => {
   try {
     const { userId, projectId } = req.params;
     const existingCache = await SavedCache.findOne({
-      projectId: projectId,
-      $or: [
-        { userId: userId },
-        { savedByUserId: userId }
-      ]
+      userId,
+      projectId
     });
     if (!existingCache) {
       return res.json({
@@ -5670,26 +5780,6 @@ app.delete("/removeSavedFeed/:userId/:projectId", async (req, res) => {
         isSaved: false,
         msg: "Saved post already removed buddy!"
       });
-    }
-    if (existingCache.taskMedia) {
-      for (const view of Object.values(existingCache.taskMedia)) {
-        if (view && view.url) {
-          const fileNameWithFolder =
-            view.url.includes("amazonaws.com")
-              ? view.url.split(".com/")[1]
-              : view.url;
-          try {
-            const delCommand = new DeleteObjectCommand({
-              Bucket: process.env.AWS_BUCKET_NAME,
-              Key: fileNameWithFolder
-            });
-            await s3.send(delCommand);
-            console.log(`Deleted saved cache image buddy: ${fileNameWithFolder}`);
-          } catch (deleteErr) {
-            console.error("Saved cache S3 delete error buddy:", deleteErr);
-          }
-        }
-      }
     }
     const vendorId = existingCache.companyInfo?._id;
     if (vendorId) {
