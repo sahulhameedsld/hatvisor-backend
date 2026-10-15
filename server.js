@@ -12,6 +12,7 @@ const cors = require("cors");
 const Attendance = require('./attendanceModle');
 const SavedCache = require("./models/SavedCache");
 const OrphanCache = require("./models/OrphanCache");
+
 const Notification = require("./models/Notification");
 const Group = require("./models/Group");
 const GroupMessage = require("./models/GroupMessage");
@@ -223,91 +224,90 @@ cron.schedule("0 * * * *", async () => {
 /* ================= 24-HOUR S3 CACHE ASSETS FORCE CLEANUP ================= */
 
 const CACHE_PREFIX = "uploads/cache/";
-const CACHE_EXPIRY_MS = 24 * 60 * 60 * 1000;
+const ORPHAN_DELAY = 24 * 60 * 60 * 1000;
 function getCacheKey(url) {
-  if (typeof url !== "string" || !url.trim()) {
-    return null;
-  }
+  if (!url || typeof url !== "string") return null;
+  let key = url.trim();
   try {
-    const value = url.trim();
-    const key = /^https?:\/\//i.test(value)
-      ? decodeURIComponent(new URL(value).pathname.slice(1))
-      : value.replace(/^\/+/, "");
-    return key.startsWith(CACHE_PREFIX) ? key : null;
+    if (key.startsWith("https://")) {
+      key = decodeURIComponent(new URL(key).pathname.slice(1));
+    }
   } catch {
     return null;
   }
+  return key.startsWith(CACHE_PREFIX) ? key : null;
 }
-async function isCacheReferenced(key) {
-  const views = [
-    "frontView",
-    "backView",
-    "leftView",
-    "rightView",
-    "ceilingView",
-    "floorView"
+async function getReferencedCacheKeys() {
+  const records = await SavedCache.find({})
+    .select("userId savedByUserId taskMedia")
+    .lean();
+  const candidateIds = [
+    ...new Set(
+      records.flatMap(r =>
+        [r.userId, r.savedByUserId]
+          .filter(Boolean)
+          .map(String)
+      )
+    )
   ];
-  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const urlPattern = new RegExp(
-    `(?:^|/)${escaped}(?:\\?.*)?$`
-  );
-  const orConditions = views.map(view => ({
-    [`taskMedia.${view}.url`]: urlPattern
-  }));
-  const records = await SavedCache.find({
-    $or: orConditions
-  }).select("userId savedByUserId").lean();
-  if (!records.length) return false;
-  const userIds = records.flatMap(record =>
-    [record.userId, record.savedByUserId]
-      .filter(id => id && mongoose.isValidObjectId(id))
-  );
-  if (!userIds.length) return false;
-  return Boolean(
-    await User.exists({ _id: { $in: userIds } })
-  );
+  const existingUsers = await User.find({
+    _id: { $in: candidateIds }
+  }).select("_id").lean();
+  const validUsers = new Set(existingUsers.map(u => String(u._id)));
+  const referenced = new Set();
+  for (const record of records) {
+    const hasActiveOwner = [record.userId, record.savedByUserId]
+      .filter(Boolean)
+      .some(id => validUsers.has(String(id)));
+    if (!hasActiveOwner) {
+      continue;
+    }
+    for (const media of Object.values(record.taskMedia || {})) {
+      const key = getCacheKey(media?.url);
+      if (key) referenced.add(key);
+    }
+  }
+  return referenced;
 }
-let cacheCleanupRunning = false;
-async function cleanupOrphanSavedCache() {
-  if (cacheCleanupRunning) return;
-  if (mongoose.connection.readyState !== 1) return;
-  cacheCleanupRunning = true;
+let orphanCleanupRunning = false;
+async function cleanupOrphanSavedFeedCache() {
+  if (orphanCleanupRunning) return;
+  orphanCleanupRunning = true;
   try {
+    const referenced = await getReferencedCacheKeys();
+    const now = Date.now();
     let continuationToken;
-    let scanned = 0;
-    let deleted = 0;
     do {
-      const response = await s3.send(
-        new ListObjectsV2Command({
-          Bucket: process.env.AWS_BUCKET_NAME,
-          Prefix: CACHE_PREFIX,
-          ContinuationToken: continuationToken
-        })
-      );
-      for (const object of response.Contents || []) {
+      const result = await s3.send(new ListObjectsV2Command({
+        Bucket: process.env.AWS_BUCKET_NAME,
+        Prefix: CACHE_PREFIX,
+        ContinuationToken: continuationToken
+      }));
+      for (const object of result.Contents || []) {
         const key = object.Key;
         if (!key || key === CACHE_PREFIX) continue;
-        scanned++;
-        if (await isCacheReferenced(key)) {
+        if (referenced.has(key)) {
           await OrphanCache.deleteOne({ s3Key: key });
           continue;
         }
-        const orphan = await OrphanCache.findOneAndUpdate(
-          { s3Key: key },
-          {
-            $setOnInsert: {
-              s3Key: key,
-              orphanedAt: new Date()
-            }
-          },
-          {
-            upsert: true,
-            returnDocument: "after"
-          }
-        );
-        const age = Date.now() - orphan.orphanedAt.getTime();
-        if (age < CACHE_EXPIRY_MS) continue;
-        if (await isCacheReferenced(key)) {
+        const existing = await OrphanCache.findOne({ s3Key: key });
+        if (!existing) {
+          await OrphanCache.updateOne(
+            { s3Key: key },
+            {
+              $setOnInsert: {
+                s3Key: key,
+                orphanedAt: new Date()
+              }
+            },
+            { upsert: true }
+          );
+          continue;
+        }
+        const age = now - new Date(existing.orphanedAt).getTime();
+        if (age < ORPHAN_DELAY) continue;
+        const latestReferences = await getReferencedCacheKeys();
+        if (latestReferences.has(key)) {
           await OrphanCache.deleteOne({ s3Key: key });
           continue;
         }
@@ -316,21 +316,19 @@ async function cleanupOrphanSavedCache() {
           Key: key
         }));
         await OrphanCache.deleteOne({ s3Key: key });
-        deleted++;
+        console.log("Deleted orphan cache:", key);
       }
-      continuationToken = response.IsTruncated
-        ? response.NextContinuationToken
+      continuationToken = result.IsTruncated
+        ? result.NextContinuationToken
         : undefined;
     } while (continuationToken);
-    console.log(`[SAVED CACHE CLEANUP] Scanned: ${scanned}, Deleted: ${deleted}`);
   } catch (error) {
-    console.error("[SAVED CACHE CLEANUP]", error);
+    console.error("Orphan cache cleanup failed:", error);
   } finally {
-    cacheCleanupRunning = false;
+    orphanCleanupRunning = false;
   }
 }
-cron.schedule("0 * * * *", cleanupOrphanSavedCache);
-
+cron.schedule("0 * * * *", cleanupOrphanSavedFeedCache);
 
 /* ================= TIME FRAME ================= */
 
@@ -1826,7 +1824,10 @@ app.delete("/deleteUser/:id", async (req, res) => {
       ]
     });
     await SavedCache.deleteMany({
-      userId: userObjectId
+      $or: [
+        { userId: userObjectId },
+        { savedByUserId: userObjectId }
+      ]
     });
     await Notification.updateMany({
       "recipients.userId": userObjectId
@@ -5771,8 +5772,11 @@ app.delete("/removeSavedFeed/:userId/:projectId", async (req, res) => {
   try {
     const { userId, projectId } = req.params;
     const existingCache = await SavedCache.findOne({
-      userId,
-      projectId
+      projectId: projectId,
+      $or: [
+        { userId: userId },
+        { savedByUserId: userId }
+      ]
     });
     if (!existingCache) {
       return res.json({
