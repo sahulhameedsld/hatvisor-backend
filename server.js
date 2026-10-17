@@ -5483,7 +5483,7 @@ app.get("/getGlobalHomeFeed", async (req, res) => {
       "projectData.isPublic": true,
       "projectData.postedAt": { $gte: twentyFourHoursAgo }
     }, {
-      name: 1, profilePic: 1, role: 1, city: 1, phone: 1, projectData: 1, companyName: 1, companyLogo: 1, companyPhone: 1
+      name: 1, profilePic: 1, role: 1, city: 1, phone: 1, projectData: 1, companyName: 1, companyLogo: 1, companyPhone: 1, createdBy: 1, usedBy: 1
     });
     let globalGeoFeed = [];
     function getDistanceInKm(lat1, lon1, lat2, lon2) {
@@ -5504,7 +5504,7 @@ app.get("/getGlobalHomeFeed", async (req, res) => {
           const projLng = project.propertyDetails?.location?.lng || userLng;
           const computedDistance = getDistanceInKm(userLat, userLng, projLat, projLng);
           globalGeoFeed.push({
-            projectId: project._id,
+            projectId: project.projectId || project._id,
             projectName: project.projectName,
             feedDescription: project.feedDescription || "",
             tags: project.tags || [],
@@ -5513,6 +5513,7 @@ app.get("/getGlobalHomeFeed", async (req, res) => {
             propertyDetails: project.propertyDetails,
             likedByFeed: project.likedByFeed || [],
             savedByFeed: project.savedByFeed || [],
+            isEmployeeCopy: Boolean(vendor.usedBy),
             isSavedByUser: (project.savedByFeed || []).some(
               savedUserId => String(savedUserId) === String(userId)
             ),
@@ -5529,13 +5530,24 @@ app.get("/getGlobalHomeFeed", async (req, res) => {
         }
       });
     });
-    globalGeoFeed.sort((a, b) => {
+    const uniqueFeedMap = new Map();
+    for (const post of globalGeoFeed) {
+      const id = String(post.projectId);
+      const existing = uniqueFeedMap.get(id);
+      if (!existing) {
+        uniqueFeedMap.set(id, post);
+      } else if (existing.isEmployeeCopy && !post.isEmployeeCopy) {
+        uniqueFeedMap.set(id, post);
+      }
+    }
+    const uniqueGlobalFeed = Array.from(uniqueFeedMap.values());
+    uniqueGlobalFeed.sort((a, b) => {
       if (a.distanceFromUser !== b.distanceFromUser) {
-        return a.distanceFromUser - b.distanceFromUser; 
+        return a.distanceFromUser - b.distanceFromUser;
       }
       return new Date(b.postedAt) - new Date(a.postedAt);
     });
-    res.json(globalGeoFeed);
+    res.json(uniqueGlobalFeed);
   } catch (err) {
     console.error("GEOSPATIAL RADIAL HOME FEED ENGINE FAILURE:", err);
     res.status(500).json({ msg: "Could not execute proximity network pipeline data arrays" });
