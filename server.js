@@ -4594,9 +4594,15 @@ app.put("/updateProject/:projectId", async (req, res) => {
           taskMedia: updatedProject.taskMedia,
           inProject: true
         };
-        await User.findByIdAndUpdate(owner._id, {
-          $addToSet: { projectData: ownerDataObject }
-        });
+        await User.updateOne(
+          {
+            _id: owner._id,
+            "projectData.projectId": { $ne: updatedProject._id }
+          },
+          {
+            $push: { projectData: ownerDataObject }
+          }
+        );
       }
     }
     for (let oldId of oldOwnerIds) {
@@ -4635,9 +4641,15 @@ app.put("/updateProject/:projectId", async (req, res) => {
           taskMedia: updatedProject.taskMedia,
           inProject: false
         };
-        await User.findByIdAndUpdate(support._id, {
-          $addToSet: { projectData: supportDataObject }
-        });
+        await User.updateOne(
+          {
+            _id: support._id,
+            "projectData.projectId": { $ne: updatedProject._id }
+          },
+          {
+            $push: { projectData: supportDataObject }
+          }
+        );
       }
     }
     for (let oldId of oldSupportIds) {
