@@ -1,3 +1,13 @@
+const { initializeApp, getApps, cert } = require("firebase-admin/app");
+const { getMessaging } = require("firebase-admin/messaging");
+const serviceAccount = require("./firebase-service-account.json");
+if (getApps().length === 0) {
+    initializeApp({
+        credential: cert(serviceAccount)
+    });
+}
+const firebaseMessaging = getMessaging();
+console.log("Firebase Admin SDK initialized successfully");
 const express = require("express");
 const mongoose = require("mongoose");
 const axios = require("axios");
