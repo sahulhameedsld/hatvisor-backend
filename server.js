@@ -1,3 +1,4 @@
+const jwt = require("jsonwebtoken");
 const { initializeApp, getApps, cert } = require("firebase-admin/app");
 const { getMessaging } = require("firebase-admin/messaging");
 const serviceAccount = require("./firebase-service-account.json");
@@ -513,6 +514,12 @@ const UserSchema = new mongoose.Schema({
   },
   address: String,
 
+  /* FIREBASE PUSH NOTIFICATION */
+  fcmTokens: {
+    type: [String],
+    default: []
+  },
+
   /* GROUP CHAT */
   attachmentPermission: {
     type: Boolean,
@@ -938,6 +945,72 @@ const UserSchema = new mongoose.Schema({
 
 const User = mongoose.model("User", UserSchema);
 
+/* ================= VERIFY JWT TOKEN ================= */
+
+const verifyToken = (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith("Bearer ")) {
+      return res.status(401).json({
+        message: "Authentication required"
+      });
+    }
+    const token = authHeader.slice(7);
+    const decoded = jwt.verify(
+      token,
+      process.env.JWT_SECRET,
+      { algorithms: ["HS256"] }
+    );
+    req.authUserId = decoded.userId;
+    next();
+  } catch (error) {
+    return res.status(401).json({
+      message: "Invalid or expired token"
+    });
+  }
+};
+
+/* ================= FIREBASE TOKEN REGISTRATION ================= */
+
+app.post("/registerFcmToken", verifyToken, async (req, res) => {
+  try {
+    const { token } = req.body;
+    const userId = req.authUserId;
+    if (
+      !mongoose.Types.ObjectId.isValid(userId) ||
+      typeof token !== "string" ||
+      !token.trim() ||
+      token.length > 4096
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid user ID or FCM token"
+      });
+    }
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { $addToSet: { fcmTokens: token.trim() } },
+      { new: true }
+    ).select("_id");
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+    return res.json({
+      success: true,
+      message: "FCM token registered"
+    });
+  } catch (error) {
+    console.error("FCM registration error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "FCM registration failed"
+    });
+  }
+});
+
 /* ================= SUBSCRIPTION PAYMENT HISTORY ================= */
 
 const SubscriptionPaymentSchema = new mongoose.Schema({
@@ -1028,20 +1101,48 @@ app.post("/signup", async(req,res)=>{
   }
 });
 
-/* ================= LOGIN ================= */
+/* ================= LOGIN WITH JWT ================= */
 
-app.post("/login", async(req,res)=>{
-  try{
+app.post("/login", async (req, res) => {
+  try {
     const { phone, password } = req.body;
-    const user = await User.findOne({ phone });
-    if(user && user.password === password){
-      res.json({ message:"Login success", user });
-    }else{
-      res.status(401).json({ message:"Invalid login" });
+    if (!phone || !password) {
+      return res.status(400).json({
+        message: "Phone and password are required"
+      });
     }
-  }catch(err){
-    console.log(err);
-    res.status(500).json({ message:"Error" });
+    const user = await User.findOne({ phone });
+    if (!user || user.password !== password) {
+      return res.status(401).json({
+        message: "Invalid login"
+      });
+    }
+    if (!process.env.JWT_SECRET) {
+      console.error("JWT_SECRET is not configured");
+      return res.status(500).json({
+        message: "Authentication configuration error"
+      });
+    }
+    const token = jwt.sign(
+      { userId: user._id.toString() },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+    const userData = user.toObject();
+    delete userData.password;
+    delete userData.resetOTP;
+    delete userData.resetOTPExpires;
+    delete userData.fcmTokens;
+    return res.json({
+      message: "Login success",
+      user: userData,
+      token
+    });
+  } catch (err) {
+    console.error("Login error:", err);
+    return res.status(500).json({
+      message: "Login failed"
+    });
   }
 });
 
@@ -2231,39 +2332,140 @@ app.get("/getUserData/:id", async (req, res) => {
   }
 });
 
-/* ================= GROUP CHAT SEND ================= */
+/* ================= FIREBASE GROUP PUSH HELPER ================= */
 
-app.post("/sendGroupMessage", upload.single("attachment"), async (req, res) => {
+async function sendChatPushNotification({recipientIds, senderId, senderName, title, message, chatType, chatId}) {
   try {
-    const { senderId, groupId, message, replyTo } = req.body;
-    let attachmentData = { filename: "", attachmentSetPath: "uploads/temp" };
+    const validIds = [...new Set(
+      recipientIds
+        .map(id => String(id))
+        .filter(id =>
+          mongoose.Types.ObjectId.isValid(id) &&
+          id !== String(senderId)
+        )
+    )];
+    if (!validIds.length) return;
+    const users = await User.find({
+      _id: { $in: validIds }
+    }).select("fcmTokens");
+    const tokens = [...new Set(
+      users.flatMap(user => user.fcmTokens || [])
+    )];
+    if (!tokens.length) {
+      console.log("No registered FCM tokens for recipients");
+      return;
+    }
+    const result = await firebaseMessaging.sendEachForMulticast({
+      tokens,
+      notification: {
+        title: title || "Hatvisor",
+        body: message?.trim() || "Sent an attachment"
+      },
+      data: {
+        type: String(chatType),
+        chatId: String(chatId),
+        senderId: String(senderId),
+        senderName: String(senderName || "")
+      },
+      android: {
+        priority: "high",
+        notification: {
+          channelId: "default",
+          sound: "default"
+        }
+      }
+    });
+    console.log(`FCM Push: ${result.successCount} success, ${result.failureCount} failed`);
+    const invalidTokens = [];
+    result.responses.forEach((response, index) => {
+      if (!response.success) {
+        const code = response.error?.code;
+        if (
+          code === "messaging/registration-token-not-registered" ||
+          code === "messaging/invalid-registration-token"
+        ) {
+          invalidTokens.push(tokens[index]);
+        }
+      }
+    });
+    if (invalidTokens.length) {
+      await User.updateMany(
+        {},
+        { $pull: { fcmTokens: { $in: invalidTokens } } }
+      );
+    }
+  } catch (error) {
+    console.error("Firebase chat push error:", error.message);
+  }
+}
+
+/* ================= GROUP CHAT SEND WITH FCM ================= */
+
+app.post("/sendGroupMessage", verifyToken, upload.single("attachment"), async (req, res) => {
+  try {
+    const { groupId, message, replyTo } = req.body;
+    const senderId = req.authUserId;
+    if (!mongoose.Types.ObjectId.isValid(groupId)) {
+      return res.status(400).json({ message: "Invalid group ID" });
+    }
+    const group = await Group.findById(groupId);
+    if (!group) {
+      return res.status(404).json({ message: "Group not found" });
+    }
+    const vendorId = String(group.vendorId);
+    const employees = await User.find({
+      role: "customer",
+      usedBy: vendorId,
+      isActiveForVendor: true
+    }).select("_id");
+    const memberIds = [
+      vendorId,
+      ...employees.map(emp => String(emp._id))
+    ];
+    if (!memberIds.includes(String(senderId))) {
+      return res.status(403).json({ message: "You are not a member of this group" });
+    }
+    let attachmentData = {
+      filename: "",
+      attachmentSetPath: "uploads/temp"
+    };
     if (req.file) {
-      const fullKey = req.file.key;
-      attachmentData.filename = path.basename(fullKey);
+      attachmentData.filename = path.basename(req.file.key);
     }
     const msg = new GroupMessage({
       senderId,
       groupId,
-      message,
+      message: message || "",
       attachments: attachmentData,
       replyTo: replyTo || null
     });
     await msg.save();
     const populated = await GroupMessage.findById(msg._id)
-      .populate("senderId", "name profilePic")
-      .populate({
-        path: "replyTo",
-        populate: {
-          path: "senderId",
-          select: "name"
-        }
-      });
-    res.json(populated);
-  } catch (err) {
-    console.log(err);
-    res.status(500).json({
-      message: "Group send failed"
+    .populate("senderId", "name profilePic")
+    .populate({
+      path: "replyTo",
+      populate: {
+        path: "senderId",
+        select: "name"
+      }
     });
+    res.json(populated);
+    const sender = await User.findById(senderId)
+    .select("name companyName");
+    await sendChatPushNotification({
+      recipientIds: memberIds,
+      senderId,
+      senderName: sender?.name || sender?.companyName || "Member",
+      title: sender?.name || sender?.companyName || "Group message",
+      message: message || "",
+      chatType: "group",
+      chatId: groupId
+    });
+  } catch (err) {
+    console.error("Group send error:", err);
+    if (!res.headersSent) {
+      res.status(500).json({ message: "Group send failed" });
+    }
   }
 });
 
@@ -2529,13 +2731,26 @@ app.get('/download-file/:filename', async (req, res) => {
   }
 });
 
-/* ================= PROJECT GROUP CHAT SEND ================= */
+/* ================= PROJECT GROUP CHAT SEND WITH FCM ================= */
 
-app.post("/sendProjectGroupMessage", upload.single("attachment"), async (req, res) => {
+app.post("/sendProjectGroupMessage", verifyToken, upload.single("attachment"), async (req, res) => {
   try {
-    const { senderId, projectId, message, replyTo, forwardAttachmentFilename, isForwarded, forwardedBy, originalSenderId, originalMessageId } = req.body;
-    if (!senderId || !projectId) {
-      return res.status(400).json({ message: "senderId and projectId are required!" });
+    const {projectId, message, replyTo, forwardAttachmentFilename, isForwarded, forwardedBy, originalSenderId, originalMessageId} = req.body;
+    const senderId = req.authUserId;
+    if (!mongoose.Types.ObjectId.isValid(projectId)) {
+      return res.status(400).json({ message: "Invalid project ID" });
+    }
+    const projectMembers = await User.find({
+      projectData: {
+        $elemMatch: {
+          projectId: new mongoose.Types.ObjectId(projectId),
+          inProject: true
+        }
+      }
+    }).select("_id name companyName");
+    const memberIds = projectMembers.map(member => String(member._id));
+    if (!memberIds.includes(String(senderId))) {
+      return res.status(403).json({ message: "You are not an active member of this project" });
     }
     let attachmentData = { filename: "", attachmentSetPath: "uploads/temp" };
     if (req.file) {
@@ -2565,12 +2780,21 @@ app.post("/sendProjectGroupMessage", upload.single("attachment"), async (req, re
         }
       });
     res.json(populated);
-  } catch (err) {
-    console.error("❌ Project Group send error:", err);
-    res.status(500).json({
-      message: "Project group message send failed",
-      error: err.message
+    const sender = projectMembers.find(member => String(member._id) === String(senderId));
+    await sendChatPushNotification({
+      recipientIds: memberIds,
+      senderId,
+      senderName: sender?.name || sender?.companyName || "Member",
+      title: sender?.name || sender?.companyName || "Project message",
+      message: message || "",
+      chatType: "projectgroup",
+      chatId: projectId
     });
+  } catch (err) {
+    console.error("Project group send error:", err);
+    if (!res.headersSent) {
+      res.status(500).json({ message: "Project group message send failed" });
+    }
   }
 });
 
