@@ -54,6 +54,18 @@ const ProjectGroupMessageSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         default: null
     },
+    reactions: [{
+        userId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User",
+            required: true
+        },
+        emoji: {
+            type: String,
+            required: true,
+            enum: ["👍", "❤️", "😂", "😮", "😢", "🙏"]
+        }
+    }],
     seenBy: [{
         type: mongoose.Schema.Types.ObjectId,
         ref: "User"

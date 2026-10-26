@@ -1075,6 +1075,18 @@ const MessageSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     default: null
   },
+  reactions: [{
+    userId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+        required: true
+    },
+    emoji: {
+        type: String,
+        required: true,
+        enum: ["👍", "❤️", "😂", "😮", "😢", "🙏"]
+    }
+  }],
   createdAt: {
     type: Date,
     default: Date.now
@@ -2224,6 +2236,105 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => {
     console.log("User disconnected");
   });
+});
+
+/* ================= MESSAGE EMOJI REACTIONS ================= */
+
+app.put("/reactMessage/:type/:messageId", verifyToken, async (req, res) => {
+  try {
+    const { type, messageId } = req.params;
+    const { emoji } = req.body;
+    const userId = String(req.authUserId);
+    const allowedEmojis = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
+    if (!mongoose.Types.ObjectId.isValid(messageId)) {
+      return res.status(400).json({ message: "Invalid message ID" });
+    }
+    if (!allowedEmojis.includes(emoji)) {
+      return res.status(400).json({ message: "Invalid emoji" });
+    }
+    const models = {
+      personal: Message,
+      group: GroupMessage,
+      project: ProjectGroupMessage
+    };
+    const Model = models[type];
+    if (!Model) {
+      return res.status(400).json({ message: "Invalid chat type" });
+    }
+    const msg = await Model.findById(messageId);
+    if (!msg || msg.deleted === true) {
+      return res.status(404).json({ message: "Message not found" });
+    }
+    if (type === "personal") {
+      if (
+        String(msg.senderId) !== userId &&
+        String(msg.receiverId) !== userId
+      ) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+    }
+    if (type === "group") {
+      const group = await Group.findById(msg.groupId);
+      if (!group) {
+        return res.status(404).json({ message: "Group not found" });
+      }
+      const isVendor = String(group.vendorId) === userId;
+      const member = await User.exists({
+        _id: userId,
+        role: "customer",
+        usedBy: String(group.vendorId),
+        isActiveForVendor: true
+      });
+      if (!isVendor && !member) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+    }
+    if (type === "project") {
+      const member = await User.exists({
+        _id: userId,
+        projectData: {
+          $elemMatch: {
+            projectId: msg.projectId,
+            inProject: true
+          }
+        }
+      });
+      if (!member) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+    }
+    const existing = (msg.reactions || []).find(
+      r => String(r.userId) === userId
+    );
+    const update = existing?.emoji === emoji
+      ? { $pull: { reactions: { userId: new mongoose.Types.ObjectId(userId) } } }
+      : {
+          $pull: { reactions: { userId: new mongoose.Types.ObjectId(userId) } }
+        };
+    await Model.updateOne({ _id: messageId }, update);
+    if (existing?.emoji !== emoji) {
+      await Model.updateOne(
+        { _id: messageId },
+        {
+          $push: {
+            reactions: {
+              userId: new mongoose.Types.ObjectId(userId),
+              emoji
+            }
+          }
+        }
+      );
+    }
+    const updated = await Model.findById(messageId).select("reactions");
+    return res.json({
+      success: true,
+      messageId,
+      reactions: updated.reactions || []
+    });
+  } catch (err) {
+    console.error("Reaction error:", err);
+    return res.status(500).json({ message: "Reaction failed" });
+  }
 });
 
 /* ================= CHAT COMPANY SEND ================= */
