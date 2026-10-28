@@ -2274,24 +2274,22 @@ app.put("/reactMessage/:type/:messageId", verifyToken, async (req, res) => {
       }
     }
     if (type === "group") {
-      const group = await Group.findOne({
-        $or: [
-          { _id: msg.groupId },
-          { vendorId: msg.groupId }
-        ]
+      const ownerId = String(msg.groupId);
+      const owner = await User.exists({
+        _id: ownerId,
+        role: "company"
       });
-      if (!group) {
-        return res.status(404).json({ message: "Group not found" });
+      if (!owner) {
+        return res.status(404).json({ message: "Company owner not found" });
       }
-      const vendorId = String(group.vendorId);
-      const isVendor = vendorId === userId;
-      const member = await User.exists({
+      const isOwner = userId === ownerId;
+      const isEmployee = await User.exists({
         _id: userId,
         role: "customer",
-        usedBy: vendorId,
+        usedBy: ownerId,
         isActiveForVendor: true
       });
-      if (!isVendor && !member) {
+      if (!isOwner && !isEmployee) {
         return res.status(403).json({ message: "Access denied" });
       }
     }
