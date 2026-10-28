@@ -2274,15 +2274,21 @@ app.put("/reactMessage/:type/:messageId", verifyToken, async (req, res) => {
       }
     }
     if (type === "group") {
-      const group = await Group.findById(msg.groupId);
+      const group = await Group.findOne({
+        $or: [
+          { _id: msg.groupId },
+          { vendorId: msg.groupId }
+        ]
+      });
       if (!group) {
         return res.status(404).json({ message: "Group not found" });
       }
-      const isVendor = String(group.vendorId) === userId;
+      const vendorId = String(group.vendorId);
+      const isVendor = vendorId === userId;
       const member = await User.exists({
         _id: userId,
         role: "customer",
-        usedBy: String(group.vendorId),
+        usedBy: vendorId,
         isActiveForVendor: true
       });
       if (!isVendor && !member) {
