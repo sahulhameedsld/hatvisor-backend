@@ -2307,22 +2307,39 @@ app.put("/reactMessage/:type/:messageId", verifyToken, async (req, res) => {
         return res.status(403).json({ message: "Access denied" });
       }
     }
-    const existing = (msg.reactions || []).find(
-      r => String(r.userId) === userId
-    );
-    const update = existing?.emoji === emoji
-      ? { $pull: { reactions: { userId: new mongoose.Types.ObjectId(userId) } } }
-      : {
-          $pull: { reactions: { userId: new mongoose.Types.ObjectId(userId) } }
-        };
-    await Model.updateOne({ _id: messageId }, update);
-    if (existing?.emoji !== emoji) {
+    const reactionUserId = new mongoose.Types.ObjectId(userId);
+    const existing = (msg.reactions || []).find(reaction => String(reaction.userId) === userId);
+    if (existing && existing.emoji === emoji) {
       await Model.updateOne(
         { _id: messageId },
         {
+          $pull: {
+            reactions: { userId: reactionUserId }
+          }
+        }
+      );
+    } else if (existing) {
+      await Model.updateOne(
+        {
+          _id: messageId,
+          "reactions.userId": reactionUserId
+        },
+        {
+          $set: {
+            "reactions.$.emoji": emoji
+          }
+        }
+      );
+    } else {
+      await Model.updateOne(
+        {
+          _id: messageId,
+          "reactions.userId": { $ne: reactionUserId }
+        },
+        {
           $push: {
             reactions: {
-              userId: new mongoose.Types.ObjectId(userId),
+              userId: reactionUserId,
               emoji
             }
           }
