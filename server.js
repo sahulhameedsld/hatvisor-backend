@@ -2540,11 +2540,24 @@ app.post("/sendGroupMessage", verifyToken, upload.single("attachment"), async (r
     if (!mongoose.Types.ObjectId.isValid(groupId)) {
       return res.status(400).json({ message: "Invalid group ID" });
     }
-    const group = await Group.findById(groupId);
+    // Support both actual Group ID and company owner ID
+    let group = await Group.findById(groupId);
     if (!group) {
-      return res.status(404).json({ message: "Group not found" });
+      group = await Group.findOne({ vendorId: groupId });
     }
-    const vendorId = String(group.vendorId);
+    let vendorId;
+    if (group) {
+      vendorId = String(group.vendorId);
+    } else {
+      const owner = await User.findOne({
+        _id: groupId,
+        role: "company"
+      }).select("_id");
+      if (!owner) {
+        return res.status(404).json({ message: "Group not found" });
+      }
+      vendorId = String(owner._id);
+    }
     const employees = await User.find({
       role: "customer",
       usedBy: vendorId,
