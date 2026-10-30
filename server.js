@@ -987,10 +987,15 @@ app.post("/registerFcmToken", verifyToken, async (req, res) => {
         message: "Invalid user ID or FCM token"
       });
     }
+    const cleanToken = token.trim();
+    await User.updateMany(
+      { _id: { $ne: userId }, fcmTokens: cleanToken },
+      { $pull: { fcmTokens: cleanToken } }
+    );
     const user = await User.findByIdAndUpdate(
       userId,
-      { $addToSet: { fcmTokens: token.trim() } },
-      { new: true }
+      { $addToSet: { fcmTokens: cleanToken } },
+      { returnDocument: "after" }
     ).select("_id");
     if (!user) {
       return res.status(404).json({
@@ -2480,8 +2485,18 @@ async function sendChatPushNotification({recipientIds, senderId, senderName, tit
     const users = await User.find({
       _id: { $in: validIds }
     }).select("fcmTokens");
+    const sender = await User.findById(senderId)
+      .select("fcmTokens");
+    const senderTokens = new Set(
+      (sender?.fcmTokens || [])
+        .filter(Boolean)
+        .map(token => String(token))
+    );
     const tokens = [...new Set(
       users.flatMap(user => user.fcmTokens || [])
+        .filter(Boolean)
+        .map(token => String(token))
+        .filter(token => !senderTokens.has(token))
     )];
     if (!tokens.length) {
       console.log("No registered FCM tokens for recipients");
