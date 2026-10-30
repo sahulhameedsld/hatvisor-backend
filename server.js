@@ -57,12 +57,12 @@ app.use(express.json());
 /* ================= VERIFY PHONE & GENERATE OTP & SEND MAIL TO VENDOR ================= */
 
 const transporter = nodemailer.createTransport({
-    host: "asi.acousticalsurfaces.in",
-    port: 465,
+    host: process.env.SMTP_HOST,
+    port: Number(process.env.SMTP_PORT || 465),
     secure: true,
     auth: {
-        user: "seo@asi.acousticalsurfaces.in",
-        pass: "Welcome@321"
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASSWORD
     },
     tls: {
       rejectUnauthorized: false
@@ -416,9 +416,9 @@ app.post("/upload", upload.single("task"), (req, res) => {
 
 /* ================= MONGODB ================= */
 
-mongoose.connect("mongodb+srv://hatvisor:SLD%40cse311@hatvisor.xpvbtkl.mongodb.net/Hatvisor?retryWrites=true&w=majority")
-.then(()=>console.log("MongoDB Connected"))
-.catch(err=>console.log(err));
+mongoose.connect(process.env.MONGODB_URI)
+.then(() => console.log("MongoDB Connected"))
+.catch(err => console.error("MongoDB Connection Error:", err));
 
 /* ================= REVERSE GEOCODE ================= */
 
@@ -2466,7 +2466,7 @@ app.get("/getUserData/:id", async (req, res) => {
 
 /* ================= FIREBASE GROUP PUSH HELPER ================= */
 
-async function sendChatPushNotification({recipientIds, senderId, senderName, title, message, chatType, chatId}) {
+async function sendChatPushNotification({recipientIds, senderId, senderName, title, message, chatType, chatId, messageId, attachmentFilename = ""}) {
   try {
     const validIds = [...new Set(
       recipientIds
@@ -2487,39 +2487,51 @@ async function sendChatPushNotification({recipientIds, senderId, senderName, tit
       console.log("No registered FCM tokens for recipients");
       return;
     }
-    const result = await firebaseMessaging.sendEachForMulticast({
-      tokens,
-      notification: {
-        title: title || "Hatvisor",
-        body: message?.trim() || "Sent an attachment"
-      },
-      data: {
-        type: String(chatType),
-        chatId: String(chatId),
-        senderId: String(senderId),
-        senderName: String(senderName || "")
-      },
-      android: {
-        priority: "high",
-        notification: {
-          channelId: "default",
-          sound: "default"
-        }
-      }
-    });
-    console.log(`FCM Push: ${result.successCount} success, ${result.failureCount} failed`);
     const invalidTokens = [];
-    result.responses.forEach((response, index) => {
-      if (!response.success) {
-        const code = response.error?.code;
-        if (
-          code === "messaging/registration-token-not-registered" ||
-          code === "messaging/invalid-registration-token"
-        ) {
-          invalidTokens.push(tokens[index]);
+    let totalSuccess = 0;
+    let totalFailure = 0;
+
+    for (let i = 0; i < tokens.length; i += 500) {
+      const batch = tokens.slice(i, i + 500);
+
+      const result = await firebaseMessaging.sendEachForMulticast({
+        tokens: batch,
+        data: {
+          type: "chat",
+          chatType: String(chatType),
+          chatId: String(chatId),
+          messageId: String(messageId),
+          senderId: String(senderId),
+          senderName: String(senderName || ""),
+          groupName: String(title || "Hatvisor"),
+          message: String(message || ""),
+          attachmentFilename: String(attachmentFilename || "")
+        },
+        android: {
+          priority: "high"
         }
-      }
-    });
+      });
+
+      totalSuccess += result.successCount;
+      totalFailure += result.failureCount;
+
+      result.responses.forEach((response, index) => {
+        if (!response.success) {
+          const code = response.error?.code;
+
+          if (
+            code === "messaging/registration-token-not-registered" ||
+            code === "messaging/invalid-registration-token"
+          ) {
+            invalidTokens.push(batch[index]);
+          }
+        }
+      });
+    }
+
+    console.log(
+      `FCM Push: ${totalSuccess} success, ${totalFailure} failed`
+    );
     if (invalidTokens.length) {
       await User.updateMany(
         {},
@@ -2570,6 +2582,22 @@ app.post("/sendGroupMessage", verifyToken, upload.single("attachment"), async (r
     if (!memberIds.includes(String(senderId))) {
       return res.status(403).json({ message: "You are not a member of this group" });
     }
+    if (replyTo) {
+      if (!mongoose.Types.ObjectId.isValid(replyTo)) {
+        return res.status(400).json({
+          message: "Invalid reply message ID"
+        });
+      }
+      const originalMessage = await GroupMessage.findOne({
+        _id: replyTo,
+        groupId: groupId
+      }).select("_id");
+      if (!originalMessage) {
+        return res.status(400).json({
+          message: "Reply message not found in this group"
+        });
+      }
+    }
     let attachmentData = {
       filename: "",
       attachmentSetPath: "uploads/temp"
@@ -2597,14 +2625,20 @@ app.post("/sendGroupMessage", verifyToken, upload.single("attachment"), async (r
     res.json(populated);
     const sender = await User.findById(senderId)
     .select("name companyName");
+    const company = await User.findById(vendorId)
+      .select("companyName name");
     await sendChatPushNotification({
       recipientIds: memberIds,
       senderId,
-      senderName: sender?.name || sender?.companyName || "Member",
-      title: sender?.name || sender?.companyName || "Group message",
+      senderName: sender?.name || "Member",
+      title: company?.companyName || company?.name || "Company Group",
       message: message || "",
       chatType: "group",
-      chatId: groupId
+      chatId: groupId,
+      messageId: msg._id,
+      attachmentFilename: attachmentData.filename
+        ? path.basename(attachmentData.filename)
+        : ""
     });
   } catch (err) {
     console.error("Group send error:", err);
@@ -2897,7 +2931,26 @@ app.post("/sendProjectGroupMessage", verifyToken, upload.single("attachment"), a
     if (!memberIds.includes(String(senderId))) {
       return res.status(403).json({ message: "You are not an active member of this project" });
     }
-    let attachmentData = { filename: "", attachmentSetPath: "uploads/temp" };
+    if (replyTo) {
+      if (!mongoose.Types.ObjectId.isValid(replyTo)) {
+        return res.status(400).json({
+          message: "Invalid reply message ID"
+        });
+      }
+      const originalMessage = await ProjectGroupMessage.findOne({
+        _id: replyTo,
+        projectId: projectId
+      }).select("_id");
+      if (!originalMessage) {
+        return res.status(400).json({
+          message: "Reply message not found in this project"
+        });
+      }
+    }
+    let attachmentData = {
+      filename: "",
+      attachmentSetPath: "uploads/temp"
+    };
     if (req.file) {
       attachmentData.filename = req.file.key;
     } else if (forwardAttachmentFilename) {
@@ -2925,15 +2978,27 @@ app.post("/sendProjectGroupMessage", verifyToken, upload.single("attachment"), a
         }
       });
     res.json(populated);
-    const sender = projectMembers.find(member => String(member._id) === String(senderId));
+    const sender = projectMembers.find(
+      member => String(member._id) === String(senderId)
+    );
+    const projectOwner = await User.findOne({
+      "projectData.projectId": new mongoose.Types.ObjectId(projectId)
+    }).select("projectData.projectName projectData.projectId");
+    const project = projectOwner?.projectData?.find(
+      p => String(p.projectId) === String(projectId)
+    );
     await sendChatPushNotification({
       recipientIds: memberIds,
       senderId,
-      senderName: sender?.name || sender?.companyName || "Member",
-      title: sender?.name || sender?.companyName || "Project message",
+      senderName: sender?.name || "Member",
+      title: project?.projectName || "Project Group",
       message: message || "",
       chatType: "projectgroup",
-      chatId: projectId
+      chatId: projectId,
+      messageId: msg._id,
+      attachmentFilename: attachmentData.filename
+        ? path.basename(attachmentData.filename)
+        : ""
     });
   } catch (err) {
     console.error("Project group send error:", err);
