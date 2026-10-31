@@ -2512,9 +2512,15 @@ async function sendChatPushNotification({recipientIds, senderId, senderName, tit
       const result = await firebaseMessaging.sendEachForMulticast({
         tokens: batch,
         data: {
-          type: "chat",
+          type: String(chatType),
           chatType: String(chatType),
           chatId: String(chatId),
+          groupId: chatType === "group"
+              ? String(chatId)
+              : "",
+          projectId: chatType === "projectgroup"
+              ? String(chatId)
+              : "",
           messageId: String(messageId),
           senderId: String(senderId),
           senderName: String(senderName || ""),
@@ -2770,6 +2776,92 @@ app.put("/updateUserPermission/:userId", async (req, res) => {
     res.status(500).json({ success: false, message: "Permission updates trace operation script broken." });
   }
 });
+
+/* ================= CHAT MESSAGE READ RECEIPTS ================= */
+
+async function markChatMessagesSeen(req, res, kind) {
+  try {
+    const userId = String(req.authUserId || "");
+    const isProject = kind === "project";
+    const chatId = req.body?.[
+      isProject ? "projectId" : "groupId"
+    ];
+    const messageIds = req.body?.messageIds;
+    const validId = (id) => mongoose.Types.ObjectId.isValid(id) && /^[a-f\d]{24}$/i.test(String(id));
+    if (!validId(userId) || !validId(chatId) || !Array.isArray(messageIds) || messageIds.length > 100 || !messageIds.every(validId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid chat or message IDs"
+      });
+    }
+    const uniqueIds = [...new Set(messageIds.map(String))];
+    if (uniqueIds.length === 0) {
+      return res.json({ success: true, modifiedCount: 0 });
+    }
+    if (isProject) {
+      const member = await User.exists({
+        _id: userId,
+        projectData: {
+          $elemMatch: {
+            projectId: new mongoose.Types.ObjectId(chatId),
+            inProject: true
+          }
+        }
+      });
+      if (!member) {
+        return res.status(403).json({ success: false, message: "Not a project member" });
+      }
+    } else {
+      let group = await Group.findById(chatId).select("vendorId");
+      if (!group) {
+        group = await Group.findOne({ vendorId: chatId }).select("vendorId");
+      }
+      const vendorId = group
+        ? String(group.vendorId)
+        : String(chatId);
+      const owner = await User.exists({ _id: vendorId, role: "company" });
+      if (!owner) {
+        return res.status(404).json({ success: false, message: "Group not found" });
+      }
+      if (userId !== vendorId) {
+        const employee = await User.exists({
+          _id: userId,
+          role: "customer",
+          usedBy: vendorId,
+          isActiveForVendor: true
+        });
+        if (!employee) {
+          return res.status(403).json({ success: false, message: "Not a group member" });
+        }
+      }
+    }
+    const Model = isProject
+      ? ProjectGroupMessage
+      : GroupMessage;
+    const field = isProject
+      ? "projectId"
+      : "groupId";
+    const result = await Model.updateMany(
+      {
+        _id: { $in: uniqueIds },
+        [field]: chatId,
+        senderId: { $ne: userId },
+        seenBy: { $ne: new mongoose.Types.ObjectId(userId) }
+      },
+      {
+        $addToSet: { seenBy: new mongoose.Types.ObjectId(userId) }
+      }
+    );
+    return res.json({ success: true, modifiedCount: result.modifiedCount || 0 });
+  } catch (error) {
+    console.error( "Mark chat messages seen failed:", error );
+    return res.status(500).json({ success: false, message: "Failed to update read receipts" });
+  }
+}
+
+app.post("/markGroupMessagesSeen", verifyToken, (req, res) => markChatMessagesSeen(req, res, "group"));
+
+app.post("/markProjectGroupMessagesSeen", verifyToken, (req, res) => markChatMessagesSeen(req, res, "project"));
 
 /* ================= GROUP CHAT RECEIVE ================= */
 
