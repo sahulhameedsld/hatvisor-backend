@@ -2665,41 +2665,89 @@ app.post("/sendGroupMessage", verifyToken, upload.single("attachment"), async (r
 
 /* ================= REGISTER LOCAL APP SYNC DOWNLOAD STATUS ================= */
 
-app.post("/syncAttachmentDownload", async (req, res) => {
+app.post("/syncAttachmentDownload", verifyToken, async (req, res) => {
   try {
-    const { userId, messageId, downloadPath, filename, groupMemberIds } = req.body;
-    const userProfile = await User.findById(userId);
-    if (!userProfile) return res.status(404).json({ message: "User index node reference profile error." });
-    userProfile.folderCreated.push({
-      attachmentId: messageId,
-      attachmentStatus: true,
-      attachmentSetPath: "uploads/temp",
-      attachmentGetPath: downloadPath
-    });
-    await userProfile.save();
-    if (groupMemberIds && groupMemberIds.length > 0 && filename) {
-      const totalGroupUsersCount = groupMemberIds.length;
-      const downloadedUsersCount = await User.countDocuments({
-        _id: { $in: groupMemberIds },
-        "folderCreated": {
+    const userId = String(req.authUserId);
+    const { messageId, downloadPath } = req.body;
+    if (!mongoose.Types.ObjectId.isValid(messageId)) {
+      return res.status(400).json({ success: false, message: "Invalid message ID" });
+    }
+    if (typeof downloadPath !== "string" || !downloadPath.trim() || !downloadPath.includes("com.hatcube.hatvisor")) {
+      return res.status(400).json({ success: false, message: "Invalid Android local attachment path" });
+    }
+    let chatType = "group";
+    let msg = await GroupMessage.findById(messageId);
+    if (!msg) {
+      chatType = "project";
+      msg = await ProjectGroupMessage.findById(messageId);
+    }
+    if (!msg || !msg.attachments?.filename) {
+      return res.status(404).json({ success: false, message: "Attachment message not found" });
+    }
+    if (chatType === "group") {
+      const groupId = String(msg.groupId);
+      let group = await Group.findById(groupId);
+      if (!group) {
+        group = await Group.findOne({ vendorId: groupId });
+      }
+      const vendorId = group
+        ? String(group.vendorId)
+        : groupId;
+      const isOwner = await User.exists({
+        _id: userId,
+        role: "company"
+      });
+      const isEmployee = await User.exists({
+        _id: userId,
+        role: "customer",
+        usedBy: vendorId,
+        isActiveForVendor: true
+      });
+      if (
+        !(String(userId) === vendorId && isOwner) &&
+        !isEmployee
+      ) {
+        return res.status(403).json({ success: false, message: "Not a group member" });
+      }
+    } else {
+      const isProjectMember = await User.exists({
+        _id: userId,
+        projectData: {
           $elemMatch: {
-            attachmentId: messageId,
-            attachmentStatus: true
+            projectId: new mongoose.Types.ObjectId(msg.projectId),
+            inProject: true
           }
         }
       });
-      console.log(`Sync status log: ${downloadedUsersCount}/${totalGroupUsersCount} users completed downloading.`);
-      if (downloadedUsersCount >= totalGroupUsersCount) {
-        console.log(`🎯 All active group members downloaded. Triggering 5-minute timer to delete exactly: ${filename}`);
-        setTimeout(() => {
-          deletePhysicalFile(filename);
-        }, 5 * 60 * 1000); 
+      if (!isProjectMember) {
+        return res.status(403).json({ success: false, message: "Not an active project member" });
       }
     }
-    res.json({ success: true, trackingRecord: userProfile.folderCreated });
+    const userProfile = await User.findById(userId);
+    if (!userProfile) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+    const existing = userProfile.folderCreated.find(
+      item => String(item.attachmentId) === String(messageId)
+    );
+    if (existing) {
+      existing.attachmentStatus = true;
+      existing.attachmentSetPath = "uploads/temp";
+      existing.attachmentGetPath = downloadPath;
+    } else {
+      userProfile.folderCreated.push({
+        attachmentId: messageId,
+        attachmentStatus: true,
+        attachmentSetPath: "uploads/temp",
+        attachmentGetPath: downloadPath
+      });
+    }
+    await userProfile.save();
+    console.log(`Android attachment sync success: ${userId} / ${messageId}`);
+    return res.status(200).json({ success: true, trackingRecord: userProfile.folderCreated });
   } catch (err) {
-    console.error("Tracking transaction processing errors tracker runtime trace:", err);
-    res.status(500).json({ message: "Unable to complete down-stream synchronization updates traces." });
+    console.error("Android attachment sync error:", err);
+    return res.status(500).json({ success: false, message: "Unable to sync Android attachment" });
   }
 });
 
@@ -2903,28 +2951,6 @@ app.put("/deleteGroupMessage/:messageId", async (req, res) => {
   }
 });
 
-/* ================= DOWNLOAD ATTACHMENT FILE ================= */
-
-app.get('/download-file/:filename', async (req, res) => {
-  try {
-    const filename = req.params.filename;
-    const key = `uploads/temp/${filename}`;
-    const command = new GetObjectCommand({
-        Bucket: process.env.AWS_BUCKET_NAME,
-        Key: key,
-    });
-    const s3Response = await s3.send(command);
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    if (s3Response.ContentType) {
-        res.setHeader('Content-Type', s3Response.ContentType);
-    }
-    s3Response.Body.pipe(res);
-  } catch (err) {
-    console.error(`❌ File not found on S3 temp or already purged: ${req.params.filename}`, err);
-    return res.status(404).send('File not found or already purged.');
-  }
-});
-
 /* ================= PROJECT GROUP CHAT SEND WITH FCM ================= */
 
 app.post("/sendProjectGroupMessage", verifyToken, upload.single("attachment"), async (req, res) => {
@@ -2967,9 +2993,9 @@ app.post("/sendProjectGroupMessage", verifyToken, upload.single("attachment"), a
       attachmentSetPath: "uploads/temp"
     };
     if (req.file) {
-      attachmentData.filename = req.file.key;
+      attachmentData.filename = path.basename(req.file.key);
     } else if (forwardAttachmentFilename) {
-      attachmentData.filename = forwardAttachmentFilename;
+      attachmentData.filename = path.basename(forwardAttachmentFilename);
     }
     const msg = new ProjectGroupMessage({
       senderId,
