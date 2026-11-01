@@ -945,6 +945,60 @@ const UserSchema = new mongoose.Schema({
 
 const User = mongoose.model("User", UserSchema);
 
+/* ================= REFRESH TOKEN SESSION ================= */
+
+const RefreshSession = mongoose.model(
+  "RefreshSession",
+  new mongoose.Schema({
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+      index: true
+    },
+    tokenHash: {
+      type: String,
+      required: true,
+      unique: true
+    },
+    expiresAt: {
+      type: Date,
+      required: true
+    },
+    createdAt: {
+      type: Date,
+      default: Date.now
+    }
+  })
+);
+
+RefreshSession.schema.index(
+  { expiresAt: 1 },
+  { expireAfterSeconds: 0 }
+);
+
+const hashRefreshToken = token =>
+  crypto.createHash("sha256").update(token).digest("hex");
+
+const createAccessToken = userId =>
+  jwt.sign(
+    { userId: String(userId) },
+    process.env.JWT_SECRET,
+    { algorithm: "HS256", expiresIn: "7d" }
+  );
+
+async function createRefreshSession(userId) {
+  const refreshToken = crypto.randomBytes(48).toString("hex");
+
+  await RefreshSession.create({
+    userId,
+    tokenHash: hashRefreshToken(refreshToken),
+    expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+  });
+
+  return refreshToken;
+}
+
 /* ================= VERIFY JWT TOKEN ================= */
 
 const verifyToken = (req, res, next) => {
@@ -1140,11 +1194,8 @@ app.post("/login", async (req, res) => {
         message: "Authentication configuration error"
       });
     }
-    const token = jwt.sign(
-      { userId: user._id.toString() },
-      process.env.JWT_SECRET,
-      { expiresIn: "7d" }
-    );
+    const token = createAccessToken(user._id);
+    const refreshToken = await createRefreshSession(user._id);
     const userData = user.toObject();
     delete userData.password;
     delete userData.resetOTP;
@@ -1153,12 +1204,77 @@ app.post("/login", async (req, res) => {
     return res.json({
       message: "Login success",
       user: userData,
-      token
+      token,
+      refreshToken
     });
   } catch (err) {
     console.error("Login error:", err);
     return res.status(500).json({
       message: "Login failed"
+    });
+  }
+});
+
+/* ================= REFRESH ACCOUNT SESSION ================= */
+
+app.post("/refreshToken", async (req, res) => {
+  try {
+    const { refreshToken } = req.body;
+    if (typeof refreshToken !== "string" || !/^[a-f0-9]{96}$/i.test(refreshToken)) {
+      return res.status(401).json({ message: "Invalid refresh session" });
+    }
+    const newRefreshToken = crypto.randomBytes(48).toString("hex");
+    const now = new Date();
+    const session = await RefreshSession.findOneAndUpdate(
+      {
+        tokenHash: hashRefreshToken(refreshToken),
+        expiresAt: { $gt: now }
+      },
+      {
+        $set: {
+          tokenHash: hashRefreshToken(newRefreshToken),
+          expiresAt: new Date(
+            Date.now() + 30 * 24 * 60 * 60 * 1000
+          )
+        }
+      },
+      { new: true }
+    );
+    if (!session) {
+      return res.status(401).json({ message: "Refresh session expired or revoked" });
+    }
+    const user = await User.findById(session.userId).select("_id");
+    if (!user) {
+      await RefreshSession.deleteOne({ _id: session._id });
+      return res.status(401).json({ message: "Account unavailable" });
+    }
+    return res.json({
+      success: true,
+      token: createAccessToken(user._id),
+      refreshToken: newRefreshToken
+    });
+  } catch (error) {
+    console.error("Refresh session failed:", error);
+    return res.status(500).json({ message: "Unable to refresh session" });
+  }
+});
+
+/* ================= LOGOUT ONE SESSION ================= */
+
+app.post("/logoutSession", async (req, res) => {
+  try {
+    const { refreshToken } = req.body;
+    if (typeof refreshToken !== "string" || !/^[a-f0-9]{96}$/i.test(refreshToken)) {
+      return res.status(400).json({ message: "Invalid refresh token" });
+    }
+    await RefreshSession.deleteOne({
+      tokenHash: hashRefreshToken(refreshToken)
+    });
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("Logout session failed:", error);
+    return res.status(500).json({
+      message: "Unable to end session"
     });
   }
 });
