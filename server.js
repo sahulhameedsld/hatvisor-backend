@@ -1156,19 +1156,48 @@ const Message = mongoose.model("Message", MessageSchema);
 
 /* ================= SIGNUP ================= */
 
-app.post("/signup", async(req,res)=>{
-  try{
-    const phone = req.body.phone.trim();
-    const exist = await User.findOne({ phone });
-    if(exist){
-      return res.status(400).json({ message:"Phone exists" });
+app.post("/signup", async (req, res) => {
+  try {
+    const { name, phone, email, password } = req.body;
+    if (typeof name !== "string" || !name.trim() || typeof phone !== "string" || !phone.trim() || typeof email !== "string" || !email.trim() || typeof password !== "string" || !password) {
+      return res.status(400).json({
+        message: "All fields are required"
+      });
     }
-    const user = new User({ ...req.body, phone });
-    await user.save();
-    res.json({ message:"Signup success", user });
-  }catch(err){
-    console.log(err);
-    res.status(500).json({ message:"Error" });
+    if (!process.env.JWT_SECRET) {
+      return res.status(500).json({ message: "Authentication configuration error" });
+    }
+    const cleanPhone = phone.trim();
+    const existing = await User.findOne({ phone: cleanPhone });
+    if (existing) {
+      return res.status(409).json({ message: "Account already exists", code: "ACCOUNT_EXISTS" });
+    }
+    let newUser;
+    try {
+      newUser = await User.create({
+        name: name.trim(),
+        phone: cleanPhone,
+        email: email.trim(),
+        password,
+        role: "customer"
+      });
+    } catch (error) {
+      if (error.code === 11000) {
+        return res.status(409).json({ message: "Account already exists", code: "ACCOUNT_EXISTS" });
+      }
+      throw error;
+    }
+    const token = createAccessToken(newUser._id);
+    const refreshToken = await createRefreshSession(newUser._id);
+    const userData = newUser.toObject();
+    delete userData.password;
+    delete userData.resetOTP;
+    delete userData.resetOTPExpires;
+    delete userData.fcmTokens;
+    return res.status(201).json({ message: "Signup success", user: userData, token, refreshToken });
+  } catch (error) {
+    console.error("Signup error:", error);
+    return res.status(500).json({ message: "Unable to complete signup" });
   }
 });
 
