@@ -2656,26 +2656,12 @@ async function sendChatPushNotification({recipientIds, senderId, senderName, tit
 
       const result = await firebaseMessaging.sendEachForMulticast({
         tokens: batch,
-        notification: {
-          title: String(title || "Hatvisor"),
-          body: String(
-              message?.trim()
-              ? message
-              : attachmentFilename
-                ? "Sent an attachment"
-                : "New message"
-          )
-        },
         data: {
-          type: String(chatType),
+          type: "chat",
           chatType: String(chatType),
           chatId: String(chatId),
-          groupId: chatType === "group"
-              ? String(chatId)
-              : "",
-          projectId: chatType === "projectgroup"
-              ? String(chatId)
-              : "",
+          groupId: chatType === "group" ? String(chatId) : "",
+          projectId: chatType === "projectgroup" ? String(chatId) : "",
           messageId: String(messageId),
           senderId: String(senderId),
           senderName: String(senderName || ""),
