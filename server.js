@@ -5246,7 +5246,162 @@ app.get("/getSingleProject/:projectId", async (req, res) => {
   }
 });
 
-/* ================= 4.4. UPDATE PROJECT ================= */
+/* ================= 4.4 MINICHAT: OWN PROJECT EMPLOYEES ================= */
+
+app.get("/miniChatMembers/:projectId", verifyToken, async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    if (!mongoose.isValidObjectId(projectId)) {
+      return res.status(400).json({ msg: "Invalid project ID" });
+    }
+    const currentUser = await User.findById(req.authUserId);
+    if (!currentUser) {
+      return res.status(401).json({ msg: "Unauthorized" });
+    }
+    const employerId = currentUser.role === "company"
+      ? String(currentUser._id)
+      : String(currentUser.usedBy || "");
+    if (!mongoose.isValidObjectId(employerId)) {
+      return res.status(403).json({ msg: "Employer not found" });
+    }
+    const employer = await User.findOne({
+      _id: employerId,
+      role: "company",
+      projectData: {
+        $elemMatch: {
+          projectId,
+          inProject: true
+        }
+      }
+    });
+    if (!employer) {
+      return res.status(403).json({ msg: "Employer is not active in this project" });
+    }
+    const isOwner = String(currentUser._id) === employerId;
+    const activeInProject = person =>
+      person.projectData?.some(p =>
+        String(p.projectId) === String(projectId) &&
+        p.inProject === true
+      );
+    if (!isOwner && !activeInProject(currentUser)) {
+      return res.status(403).json({ msg: "Not an active project member" });
+    }
+    const canRemoveMembers =
+      isOwner ||
+      (
+        currentUser.role === "customer" &&
+        ["admin", "super admin"].includes(
+          String(currentUser.subRole || "")
+            .trim()
+            .toLowerCase()
+        )
+      );
+    const employees = await User.find({
+      role: "customer",
+      usedBy: employerId,
+      isActiveForVendor: true,
+      projectData: {
+        $elemMatch: {
+          projectId,
+          inProject: true
+        }
+      }
+    }).select(
+      "name phone profilePic designation subRole role usedBy"
+    );
+    const members = [
+      {
+        _id: employer._id,
+        name: employer.companyName || employer.name || "Owner",
+        profilePic: employer.companyLogo || employer.profilePic,
+        designation: "Owner",
+        role: "company"
+      },
+      ...employees
+    ];
+    res.json({ members, canRemoveMembers, employerId });
+  } catch (err) {
+    console.error("MiniChat members error:", err);
+    res.status(500).json({ msg: "Failed to fetch members" });
+  }
+});
+
+/* ================= 4.5. MINICHAT: REMOVE OWN EMPLOYEE ================= */
+
+app.put("/miniChatRemoveMember/:projectId", verifyToken, async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { memberId } = req.body;
+    if (!mongoose.isValidObjectId(projectId) || !mongoose.isValidObjectId(memberId)) {
+      return res.status(400).json({ msg: "Invalid ID" });
+    }
+    const currentUser = await User.findById(req.authUserId);
+    if (!currentUser) {
+      return res.status(401).json({ msg: "Unauthorized" });
+    }
+    const employerId = currentUser.role === "company"
+      ? String(currentUser._id)
+      : String(currentUser.usedBy || "");
+    if (!mongoose.isValidObjectId(employerId)) {
+      return res.status(403).json({ msg: "Invalid employer" });
+    }
+    const employer = await User.findOne({
+      _id: employerId,
+      role: "company",
+      projectData: {
+        $elemMatch: {
+          projectId,
+          inProject: true
+        }
+      }
+    });
+    if (!employer) {
+      return res.status(403).json({ msg: "Employer is not active in this project" });
+    }
+    const isOwner = String(currentUser._id) === employerId;
+    const isActiveAdmin =
+      currentUser.role === "customer" &&
+      String(currentUser.usedBy) === employerId &&
+      ["admin", "super admin"].includes(
+        String(currentUser.subRole || "")
+          .trim()
+          .toLowerCase()
+      ) &&
+      currentUser.projectData?.some(p =>
+        String(p.projectId) === String(projectId) &&
+        p.inProject === true
+      );
+    if (!isOwner && !isActiveAdmin) {
+      return res.status(403).json({ msg: "No permission to remove employees" });
+    }
+    if (String(memberId) === employerId) {
+      return res.status(403).json({ msg: "Cannot remove company owner" });
+    }
+    const member = await User.findOne({
+      _id: memberId,
+      role: "customer",
+      usedBy: employerId
+    });
+    if (!member) {
+      return res.status(403).json({ msg: "Employee does not belong to your company" });
+    }
+    const memberProject = member.projectData?.find(p =>
+      String(p.projectId) === String(projectId) &&
+      p.inProject === true
+    );
+    if (!memberProject) {
+      return res.status(400).json({ msg: "Employee is not active in this project" });
+    }
+    memberProject.inProject = false;
+    await member.save();
+    res.json({ success: true, msg: "Employee removed from project" });
+  } catch (err) {
+    console.error("MiniChat remove error:", err);
+    res.status(500).json({ msg: "Failed to remove employee" });
+  }
+});
+
+/* ================= 4.6. UPDATE PROJECT ================= */
 
 app.put("/updateProject/:projectId", async (req, res) => {
   try {
@@ -5384,7 +5539,7 @@ app.put("/updateProject/:projectId", async (req, res) => {
   }
 });
 
-/* ================= 4.5. SEARCH USER ================= */
+/* ================= 4.7. SEARCH USER ================= */
 
 app.get("/searchUser", async (req, res) => {
   const { phone } = req.query;
@@ -5401,7 +5556,7 @@ app.get("/searchUser", async (req, res) => {
   }
 });
 
-/* ================= 4.6. DELETE PROJECT ================= */
+/* ================= 4.8. DELETE PROJECT ================= */
 
 app.delete("/deleteProject/:vendorId/:projectId", async (req, res) => {
   try {
@@ -5530,7 +5685,7 @@ app.delete("/deleteProject/:vendorId/:projectId", async (req, res) => {
   }
 }); 
 
-/* ================= 4.7. MARK PROJECT COMPLETED ================= */
+/* ================= 4.9. MARK PROJECT COMPLETED ================= */
 
 app.put("/updateProjectStatus", async (req, res) => {
   try {
@@ -5562,7 +5717,7 @@ app.put("/updateProjectStatus", async (req, res) => {
   }
 });
 
-/* ================= 4.8. PROJECT EMPLOYEES ================= */
+/* ================= 4.10. PROJECT EMPLOYEES ================= */
 
 app.get("/getProjectEmployees/:projectId", async (req, res) => {
   try {
@@ -5600,7 +5755,7 @@ app.get("/getProjectEmployees/:projectId", async (req, res) => {
   }
 });
 
-/* ================= 4.9. REMOVE EMPLOYEE FROM PROJECT ================= */
+/* ================= 4.11. REMOVE EMPLOYEE FROM PROJECT ================= */
 
 app.put("/removeEmployeeFromProject/:projectId", async (req, res) => {
   const { projectId } = req.params;
@@ -5617,7 +5772,7 @@ app.put("/removeEmployeeFromProject/:projectId", async (req, res) => {
   }
 });
 
-/* ================= 4.10. UPDATE EMPLOYEE IN PROJECT ================= */
+/* ================= 4.12. UPDATE EMPLOYEE IN PROJECT ================= */
 
 app.put("/updateEmployeeProjectStatus", async (req, res) => {
   const { empId, projectId, status, projectName } = req.body;
@@ -5648,7 +5803,7 @@ app.put("/updateEmployeeProjectStatus", async (req, res) => {
   }
 });
 
-/* ================= 4.11. PROJECT LABOURS ================= */
+/* ================= 4.13. PROJECT LABOURS ================= */
 
 app.get("/getMyLabours/:vendorId/:projectId", async (req, res) => {
   try {
@@ -5667,7 +5822,7 @@ app.get("/getMyLabours/:vendorId/:projectId", async (req, res) => {
   }
 });
 
-/* ================= 4.12. ASSIGN PROJECT LABOURS ================= */
+/* ================= 4.14. ASSIGN PROJECT LABOURS ================= */
 
 app.put("/assignLabourToProject/:id", async (req, res) => {
   const { projectId, projectName, pActualInTime, pActualOutTime, potStartTime, potEndTime, inLabour } = req.body;
@@ -5746,7 +5901,7 @@ app.put("/assignLabourToProject/:id", async (req, res) => {
   }
 });
 
-/* ================= 4.13. REMOVE PROJECT LABOUR ================= */
+/* ================= 4.15 REMOVE PROJECT LABOUR ================= */
 
 app.put("/removeLabourFromProject/:labourId", async (req, res) => {
   const { projectId } = req.body;
@@ -5790,7 +5945,7 @@ app.put("/removeLabourFromProject/:labourId", async (req, res) => {
   }
 });
 
-/* ================= 4.14. PROJECT LABOUR ATTENDANCE ================= */
+/* ================= 4.16. PROJECT LABOUR ATTENDANCE ================= */
 
 app.put("/projectLabourAttendance/:id", async (req, res) => {
   const { status, time, projectId, action } = req.body;
@@ -5944,7 +6099,7 @@ app.put("/projectLabourAttendance/:id", async (req, res) => {
   }
 });
 
-/* ================= 4.15. GET PROJECT DETAILS LABOUR ATTENDANCE ================= */
+/* ================= 4.17. GET PROJECT DETAILS LABOUR ATTENDANCE ================= */
 
 app.get("/getProjectDetails/labour/:id", async (req, res) => {
   try {
@@ -5964,7 +6119,7 @@ app.get("/getProjectDetails/labour/:id", async (req, res) => {
   }
 });
 
-/* ================= 4.16. SAVE OR OVERWRITE DAILY WORK STATUS VIEWS ================= */
+/* ================= 4.18. SAVE OR OVERWRITE DAILY WORK STATUS VIEWS ================= */
 
 app.post("/saveDailyTaskMedia", async (req, res) => {
   try {
@@ -6038,7 +6193,7 @@ app.post("/saveDailyTaskMedia", async (req, res) => {
   }
 });
 
-/* ================= 4.17. ADD / EDIT TASK COMMENT ================= */
+/* ================= 4.19. ADD / EDIT TASK COMMENT ================= */
 
 app.post("/addTaskMediaComment", async (req, res) => {
   try {
@@ -6129,7 +6284,7 @@ app.post("/addTaskMediaComment", async (req, res) => {
   }
 });
 
-/* ================= 4.18. HANDLE TASK MEDIA LIKE ================= */
+/* ================= 4.20. HANDLE TASK MEDIA LIKE ================= */
 
 app.post("/handleTaskMediaLike", async (req, res) => {
   try {
@@ -6162,7 +6317,7 @@ app.post("/handleTaskMediaLike", async (req, res) => {
   }
 });
 
-/* ================= 4.19. GET USER PROJECT (FETCH FROM DB) ================= */
+/* ================= 4.21. GET USER PROJECT (FETCH FROM DB) ================= */
 
 app.get("/getUserProject/:vendorId/:projectId", async (req, res) => {
   try {
@@ -6178,7 +6333,7 @@ app.get("/getUserProject/:vendorId/:projectId", async (req, res) => {
   }
 });
 
-/* ================= 4.20. GET PROJECT DETAILS (ALTERNATIVE ROUTE) ================= */
+/* ================= 4.22. GET PROJECT DETAILS (ALTERNATIVE ROUTE) ================= */
 
 app.get("/getProjectDetails/vendor/:vendorId/:projectId", async (req, res) => {
   try {
