@@ -5478,11 +5478,28 @@ app.put("/updateProject/:projectId", async (req, res) => {
         );
       }
     }
-    for (let oldId of oldOwnerIds) {
-      if (!newOwnerIds.includes(oldId)) {
-        await User.findByIdAndUpdate(oldId, {
-          $pull: { projectData: { _id: projectId } }
-        });
+    for (const oldId of oldOwnerIds) {
+      if (
+        !newOwnerIds.includes(oldId) &&
+        !(supportSources || []).some(
+          s => String(s._id) === String(oldId)
+        )
+      ) {
+        await User.updateMany(
+          {
+            $or: [
+              { _id: oldId },
+              { usedBy: String(oldId) }
+            ]
+          },
+          {
+            $pull: {
+              projectData: {
+                projectId: new mongoose.Types.ObjectId(projectId)
+              }
+            }
+          }
+        );
       }
     }
     const newSupportIds = (supportSources || []).map(s => s._id.toString());
@@ -5512,7 +5529,7 @@ app.put("/updateProject/:projectId", async (req, res) => {
           propertyOwners: propertyOwners,
           supportSources: supportSources,
           taskMedia: updatedProject.taskMedia,
-          inProject: true
+          inProject: false
         };
         await User.updateOne(
           {
@@ -5525,11 +5542,28 @@ app.put("/updateProject/:projectId", async (req, res) => {
         );
       }
     }
-    for (let oldId of oldSupportIds) {
-      if (!newSupportIds.includes(oldId)) {
-        await User.findByIdAndUpdate(oldId, {
-          $pull: { projectData: { _id: projectId } }
-        });
+    for (const oldId of oldSupportIds) {
+      if (
+        !newSupportIds.includes(oldId) &&
+        !(propertyOwners || []).some(
+          o => String(o._id) === String(oldId)
+        )
+      ) {
+        await User.updateMany(
+          {
+            $or: [
+              { _id: oldId },
+              { usedBy: String(oldId) }
+            ]
+          },
+          {
+            $pull: {
+              projectData: {
+                projectId: new mongoose.Types.ObjectId(projectId)
+              }
+            }
+          }
+        );
       }
     }
     /* ========== SYNC NEW PROPERTY OWNER EMPLOYEES ========== */
