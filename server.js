@@ -5512,7 +5512,7 @@ app.put("/updateProject/:projectId", async (req, res) => {
           propertyOwners: propertyOwners,
           supportSources: supportSources,
           taskMedia: updatedProject.taskMedia,
-          inProject: false
+          inProject: true
         };
         await User.updateOne(
           {
