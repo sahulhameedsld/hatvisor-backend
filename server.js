@@ -5512,7 +5512,7 @@ app.put("/updateProject/:projectId", async (req, res) => {
           propertyOwners: propertyOwners,
           supportSources: supportSources,
           taskMedia: updatedProject.taskMedia,
-          inProject: true
+          inProject: false
         };
         await User.updateOne(
           {
@@ -5569,7 +5569,7 @@ app.put("/updateProject/:projectId", async (req, res) => {
       await syncNewCompanyEmployees(ownerId, true);
     }
     for (const supportId of newlyAddedSupportIds) {
-      await syncNewCompanyEmployees(supportId, true);
+      await syncNewCompanyEmployees(supportId, false);
     }
     res.json(updatedProject);
   } catch (err) {
