@@ -5512,7 +5512,7 @@ app.put("/updateProject/:projectId", async (req, res) => {
           propertyOwners: propertyOwners,
           supportSources: supportSources,
           taskMedia: updatedProject.taskMedia,
-          inProject: false
+          inProject: true
         };
         await User.updateOne(
           {
@@ -5531,6 +5531,45 @@ app.put("/updateProject/:projectId", async (req, res) => {
           $pull: { projectData: { _id: projectId } }
         });
       }
+    }
+    /* ========== SYNC NEW PROPERTY OWNER EMPLOYEES ========== */
+    const newlyAddedOwnerIds = newOwnerIds.filter(
+      ownerId => !oldOwnerIds.includes(ownerId)
+    );
+    const newlyAddedSupportIds = newSupportIds.filter(
+      supportId => !oldSupportIds.includes(supportId)
+    );
+    const syncNewCompanyEmployees = async (companyId, inProjectStatus) => {
+      const employees = await User.find({
+        usedBy: companyId,
+        isActiveForVendor: true,
+        role: { $ne: "labour" }
+      });
+      for (const emp of employees) {
+        const alreadyExists = emp.projectData?.some(
+          p => String(p.projectId) === String(projectId)
+        );
+        if (alreadyExists) {
+          continue;
+        }
+        emp.projectData.push({
+          projectId: updatedProject._id,
+          projectName: updatedProject.projectName,
+          cover: updatedProject.cover,
+          propertyDetails: updatedProject.propertyDetails,
+          propertyOwners: updatedProject.propertyOwners,
+          supportSources: updatedProject.supportSources,
+          projectLabour: [],
+          inProject: inProjectStatus
+        });
+        await emp.save();
+      }
+    };
+    for (const ownerId of newlyAddedOwnerIds) {
+      await syncNewCompanyEmployees(ownerId, true);
+    }
+    for (const supportId of newlyAddedSupportIds) {
+      await syncNewCompanyEmployees(supportId, true);
     }
     res.json(updatedProject);
   } catch (err) {
