@@ -2540,27 +2540,64 @@ app.post("/sendMessage", async (req, res) => {
         return res.status(400).json({ message: "Cannot send MiniChat to yourself" });
       }
       let group;
+      let authorizedIds = new Set();
       if (isGroupMiniChat) {
         if (!mongoose.Types.ObjectId.isValid(groupId)) {
           return res.status(400).json({ message: "Invalid groupId" });
         }
         group = await Group.findById(groupId);
+        if (!group) {
+          group = await Group.findOne({ vendorId: groupId });
+        }
+        if (!group) {
+          return res.status(404).json({
+            message: "MiniChat group not found"
+          });
+        }
+        authorizedIds = new Set(
+          (group.members || [])
+            .filter(member => member.userId)
+            .map(member => String(member.userId))
+        );
+        if (group.vendorId) {
+          authorizedIds.add(String(group.vendorId));
+        }
       } else {
         if (!mongoose.Types.ObjectId.isValid(projectId)) {
           return res.status(400).json({ message: "Invalid projectId" });
         }
-        group = await ProjectGroup.findOne({ projectId });
-      }
-      if (!group) {
-        return res.status(404).json({ message: "MiniChat group not found" });
-      }
-      const authorizedIds = new Set(
-        (group.members || [])
-          .filter(member => member.userId)
-          .map(member => String(member.userId))
-      );
-      if (isGroupMiniChat && group.vendorId) {
-        authorizedIds.add(String(group.vendorId));
+        const projectOwner = await User.findOne({
+          role: "company",
+          projectData: {
+            $elemMatch: {
+              projectId,
+              inProject: true
+            }
+          }
+        });
+        if (!projectOwner) {
+          return res.status(404).json({ message: "Active project not found" });
+        }
+        const employerId = projectOwner._id;
+        const employees = await User.find({
+          role: "customer",
+          usedBy: employerId,
+          isActiveForVendor: true,
+          projectData: {
+            $elemMatch: {
+              projectId,
+              inProject: true
+            }
+          }
+        }).select("_id");
+        authorizedIds = new Set([
+          String(employerId),
+          ...employees.map(emp => String(emp._id))
+        ]);
+        group = {
+          projectId,
+          groupName: "Project MiniChat"
+        };
       }
       if (!authorizedIds.has(String(senderId)) || !authorizedIds.has(String(receiverId))) {
         return res.status(403).json({ message: "Not authorized for this MiniChat" });
