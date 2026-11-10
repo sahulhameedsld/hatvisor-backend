@@ -2512,92 +2512,18 @@ app.put("/reactMessage/:type/:messageId", verifyToken, async (req, res) => {
 
 app.post("/sendMessage", async (req, res) => {
   try {
-    const { senderId, receiverId, text, productId, chatSource, groupId, projectId } = req.body;
-    const isGroupMiniChat = chatSource === "group_minichat";
-    const isProjectMiniChat = chatSource === "project_minichat";
-    const isMiniChat = isGroupMiniChat || isProjectMiniChat;
-    let pushContext = null;
-    if (isMiniChat) {
-      const authHeader = req.headers.authorization || "";
-      const token = authHeader.startsWith("Bearer ")
-        ? authHeader.slice(7)
-        : null;
-      if (!token) {
-        return res.status(401).json({ message: "MiniChat authentication required" });
-      }
-      let decoded;
-      try {
-        decoded = jwt.verify(token, process.env.JWT_SECRET, {
-          algorithms: ["HS256"]
-        });
-      } catch {
-        return res.status(401).json({ message: "Invalid or expired token" });
-      }
-      if (!mongoose.Types.ObjectId.isValid(senderId) || !mongoose.Types.ObjectId.isValid(receiverId) || String(decoded.userId) !== String(senderId)) {
-        return res.status(403).json({ message: "Invalid MiniChat sender or receiver" });
-      }
-      if (String(senderId) === String(receiverId)) {
-        return res.status(400).json({ message: "Cannot send MiniChat to yourself" });
-      }
-      let group;
-      if (isGroupMiniChat) {
-        if (!mongoose.Types.ObjectId.isValid(groupId)) {
-          return res.status(400).json({ message: "Invalid groupId" });
-        }
-        group = await Group.findById(groupId);
-      } else {
-        if (!mongoose.Types.ObjectId.isValid(projectId)) {
-          return res.status(400).json({ message: "Invalid projectId" });
-        }
-        group = await ProjectGroup.findOne({ projectId });
-      }
-      if (!group) {
-        return res.status(404).json({ message: "MiniChat group not found" });
-      }
-      const authorizedIds = new Set(
-        (group.members || [])
-          .filter(member => member.userId)
-          .map(member => String(member.userId))
-      );
-      if (isGroupMiniChat && group.vendorId) {
-        authorizedIds.add(String(group.vendorId));
-      }
-      if (!authorizedIds.has(String(senderId)) || !authorizedIds.has(String(receiverId))) {
-        return res.status(403).json({ message: "Not authorized for this MiniChat" });
-      }
-      pushContext = {
-        chatType: isGroupMiniChat ? "group" : "projectgroup",
-        chatId: isGroupMiniChat
-          ? String(group._id)
-          : String(group.projectId),
-        title: group.groupName || "Hatvisor"
-      };
-    }
-    const msg = new Message({ senderId, receiverId, text: text || "", productId: productId || null });
+    const { senderId, receiverId, text, productId } = req.body;
+    const msg = new Message({
+      senderId,
+      receiverId,
+      text: text || "",
+      productId: productId || null
+    });
     await msg.save();
     res.json(msg);
-    if (pushContext) {
-      try {
-        const sender = await User.findById(senderId);
-        await sendChatPushNotification({
-          recipientIds: [receiverId],
-          senderId,
-          senderName: sender?.name || "Member",
-          title: pushContext.title,
-          message: text || "New message",
-          chatType: pushContext.chatType,
-          chatId: pushContext.chatId,
-          messageId: msg._id
-        });
-      } catch (pushError) {
-        console.error("MiniChat FCM error:", pushError.message);
-      }
-    }
   } catch (err) {
-    console.error("Send message error:", err);
-    if (!res.headersSent) {
-      res.status(500).json({ message: "Send failed" });
-    }
+    console.log(err);
+    res.status(500).json({ message: "Send failed" });
   }
 });
 
