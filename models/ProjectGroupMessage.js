@@ -17,7 +17,22 @@ const ProjectGroupMessageSchema = new mongoose.Schema({
     },
     attachments: {
         filename: { type: String, default: "" },
-        attachmentSetPath: { type: String, default: "uploads/temp" }
+        attachmentSetPath: {
+            type: String,
+            default: "uploads/temp"
+        },
+        originalname: {
+            type: String,
+            default: ""
+        },
+        mimetype: {
+            type: String,
+            default: ""
+        },
+        isVoiceNote: {
+            type: Boolean,
+            default: false
+        }
     },
     syncStatus: [{
         userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },

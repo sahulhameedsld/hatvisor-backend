@@ -2875,10 +2875,30 @@ app.post("/sendGroupMessage", verifyToken, upload.single("attachment"), async (r
     }
     let attachmentData = {
       filename: "",
-      attachmentSetPath: "uploads/temp"
+      attachmentSetPath: "uploads/temp",
+      originalname: "",
+      mimetype: "",
+      isVoiceNote: false
     };
     if (req.file) {
       attachmentData.filename = path.basename(req.file.key);
+      attachmentData.originalname = req.file.originalname || "";
+      attachmentData.mimetype = req.file.mimetype || "";
+      attachmentData.isVoiceNote = /^voice[-_]/i.test(req.file.originalname || "");
+      console.log("GROUP ATTACHMENT:", {
+        filename: attachmentData.filename,
+        originalname: attachmentData.originalname,
+        mimetype: attachmentData.mimetype,
+        isVoiceNote: attachmentData.isVoiceNote
+      });
+    }
+    if (req.file) {
+      attachmentData.filename = path.basename(req.file.key);
+      console.log("CHAT ATTACHMENT UPLOAD:", {
+        originalname: req.file.originalname,
+        mimetype: req.file.mimetype,
+        storedFilename: attachmentData.filename
+      });
     }
     const msg = new GroupMessage({
       senderId,
@@ -3336,10 +3356,32 @@ app.post("/sendProjectGroupMessage", verifyToken, upload.single("attachment"), a
     }
     let attachmentData = {
       filename: "",
-      attachmentSetPath: "uploads/temp"
+      attachmentSetPath: "uploads/temp",
+      originalname: "",
+      mimetype: "",
+      isVoiceNote: false
     };
     if (req.file) {
       attachmentData.filename = path.basename(req.file.key);
+      attachmentData.originalname = req.file.originalname || "";
+      attachmentData.mimetype = req.file.mimetype || "";
+      attachmentData.isVoiceNote = /^voice[-_]/i.test(req.file.originalname || "");
+      console.log("PROJECT ATTACHMENT:", {
+        filename: attachmentData.filename,
+        originalname: attachmentData.originalname,
+        mimetype: attachmentData.mimetype,
+        isVoiceNote: attachmentData.isVoiceNote
+      });
+    } else if (forwardAttachmentFilename) {
+      attachmentData.filename = path.basename(forwardAttachmentFilename);
+    }
+    if (req.file) {
+      attachmentData.filename = path.basename(req.file.key);
+      console.log("CHAT ATTACHMENT UPLOAD:", {
+        originalname: req.file.originalname,
+        mimetype: req.file.mimetype,
+        storedFilename: attachmentData.filename
+      });
     } else if (forwardAttachmentFilename) {
       attachmentData.filename = path.basename(forwardAttachmentFilename);
     }
