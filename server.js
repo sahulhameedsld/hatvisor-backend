@@ -2624,6 +2624,7 @@ app.post("/sendMessage", async (req, res) => {
           message: text || "New message",
           chatType: pushContext.chatType,
           chatId: pushContext.chatId,
+          chatSource: String(chatSource || ""),
           messageId: msg._id
         });
       } catch (pushError) {
@@ -2727,7 +2728,7 @@ app.get("/getUserData/:id", async (req, res) => {
 
 /* ================= FIREBASE GROUP PUSH HELPER ================= */
 
-async function sendChatPushNotification({recipientIds, senderId, senderName, title, message, chatType, chatId, messageId, attachmentFilename = ""}) {
+async function sendChatPushNotification({recipientIds, senderId, senderName, title, message, chatType, chatId, messageId, attachmentFilename = "", chatSource = ""}) {
   try {
     const validIds = [...new Set(
       recipientIds
@@ -2770,6 +2771,7 @@ async function sendChatPushNotification({recipientIds, senderId, senderName, tit
         data: {
           type: "chat",
           chatType: String(chatType),
+          chatSource: String(chatSource || ""),
           chatId: String(chatId),
           groupId: chatType === "group" ? String(chatId) : "",
           projectId: chatType === "projectgroup" ? String(chatId) : "",
