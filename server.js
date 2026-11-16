@@ -191,6 +191,178 @@ async function triggerNotification({ recipientId, senderId, senderName, senderPi
   }
 }
 
+/* ================= SUBSCRIPTION FCM NOTIFICATIONS ================= */
+
+async function sendSubscriptionFCM(user, event, title, message) {
+  const tokens = [...new Set(user.fcmTokens || [])]
+    .filter(Boolean);
+  if (!tokens.length) return;
+  for (let i = 0; i < tokens.length; i += 500) {
+    const batch = tokens.slice(i, i + 500);
+    const result = await firebaseMessaging.sendEachForMulticast({
+      tokens: batch,
+      data: {
+        type: "subscription",
+        event: String(event),
+        title: String(title),
+        message: String(message),
+        route: "/subscription"
+      },
+      android: {
+        priority: "high"
+      }
+    });
+    const invalidTokens = [];
+    result.responses.forEach((response, index) => {
+      const code = response.error?.code;
+      if (
+        code === "messaging/registration-token-not-registered" ||
+        code === "messaging/invalid-registration-token"
+      ) {
+        invalidTokens.push(batch[index]);
+      }
+    });
+    if (invalidTokens.length) {
+      await User.updateOne(
+        { _id: user._id },
+        { $pull: { fcmTokens: { $in: invalidTokens } } }
+      );
+    }
+  }
+}
+
+/* ================= DAILY SUBSCRIPTION REMINDER ================= */
+
+cron.schedule("0 9 * * *", async () => {
+  console.log("Checking subscription reminders...");
+
+  try {
+    const now = new Date();
+
+    const users = await User.find({
+      role: "company"
+    });
+
+    for (const user of users) {
+      try {
+        const sub = user.subscription;
+        if (!sub) continue;
+
+        const isPaid = sub.payment === true;
+
+        if (!isPaid && sub.plan !== "trial") continue;
+        if (!isPaid && sub.paused) continue;
+
+        if (
+          isPaid &&
+          !["6months", "yearly"].includes(sub.plan)
+        ) continue;
+
+        const expiry = isPaid
+          ? sub.subscriptionEnd
+          : sub.trialEnd;
+
+        if (!expiry) continue;
+
+        const remainingMs =
+          new Date(expiry).getTime() - now.getTime();
+
+        if (remainingMs <= 0) continue;
+
+        const daysLeft = Math.ceil(
+          remainingMs / (24 * 60 * 60 * 1000)
+        );
+
+        let event = "";
+        let title = "";
+        let message = "";
+
+        if (
+          !isPaid &&
+          daysLeft >= 1 &&
+          daysLeft <= 3
+        ) {
+          event = "trial_reminder";
+          title = "Trial Expiry Reminder";
+          message =
+            `Your Hatvisor free trial expires in ${daysLeft} day(s). Subscribe now to continue using Hatvisor.`;
+        }
+
+        if (isPaid && daysLeft === 7) {
+          event = "renewal_reminder";
+          title = "Subscription Renewal Reminder";
+          message =
+            `Your Hatvisor subscription expires in ${daysLeft} days. Renew your plan to continue using Hatvisor.`;
+        }
+
+        if (!event) continue;
+
+        const key = [
+          user._id.toString(),
+          event,
+          new Date(expiry).toISOString(),
+          daysLeft
+        ].join(":");
+
+        // Avoid sending the same reminder twice
+        const existing = await SubscriptionReminder.findOne({
+          key
+        });
+
+        if (existing) continue;
+
+        const reminder = await SubscriptionReminder.create({
+          key,
+          status: "pending"
+        });
+
+        try {
+          await sendSubscriptionFCM(
+            user,
+            event,
+            title,
+            message
+          );
+
+          reminder.status = "sent";
+          await reminder.save();
+
+          console.log(
+            "Subscription reminder processed:",
+            user._id,
+            event
+          );
+        } catch (fcmError) {
+          reminder.status = "failed";
+          await reminder.save();
+
+          console.error(
+            "Subscription FCM error:",
+            fcmError
+          );
+        }
+
+      } catch (userError) {
+        if (userError.code !== 11000) {
+          console.error(
+            "Reminder user error:",
+            userError
+          );
+        }
+      }
+    }
+
+  } catch (error) {
+    console.error(
+      "Subscription reminder cron error:",
+      error
+    );
+  }
+
+}, {
+  timezone: "Asia/Kolkata"
+});
+
 /* ================= 24-HOUR S3 TEMP ASSETS FORCE CLEANUP ================= */
 
 cron.schedule("0 * * * *", async () => {
@@ -942,8 +1114,27 @@ const UserSchema = new mongoose.Schema({
   }
 });
 
-
 const User = mongoose.model("User", UserSchema);
+
+/* ========== SUBSCRIPTION REMINDER HISTORY ========== */
+
+const SubscriptionReminderSchema = new mongoose.Schema({
+  key: {
+    type: String,
+    required: true,
+    unique: true
+  },
+  status: {
+    type: String,
+    default: "pending"
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  }
+});
+const SubscriptionReminder = mongoose.model("SubscriptionReminder", SubscriptionReminderSchema);
+
 
 /* ================= REFRESH TOKEN SESSION ================= */
 
@@ -8211,6 +8402,17 @@ app.post("/verifyPayment", async (req, res) => {
         invoiceNumber
       });
     await payment.save();
+    try {
+      const planName = plan === "6months" ? "6-month" : "1-year";
+      await sendSubscriptionFCM(
+        user,
+        "payment_success",
+        "Payment Successful",
+        `Your Hatvisor ${planName} subscription payment was successful. Your plan is now active.`
+      );
+    } catch (fcmError) {
+      console.error("Payment success FCM error:", fcmError);
+    }
     res.json({
       success: true,
       message: "Payment verified successfully",
