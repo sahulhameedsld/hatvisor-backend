@@ -8868,7 +8868,6 @@ app.get("/getDashboardSettings/:userId", async (req, res) => {
   }
 });
 
-
 /* ================= HATVISOR AI HELP & SUPPORT ================= */
 
 const helpGuidePath = path.join(__dirname, "knowledge", "HatvisorUserGuid.docx");
@@ -8930,6 +8929,45 @@ app.post("/api/help-support/chat", verifyToken, async (req, res) => {
     const { question, history = [] } = req.body;
     if (typeof question !== "string" || !question.trim() || question.length > 2000) {
       return res.status(400).json({ message: "Invalid question" });
+    }
+    const normalizedQuestion = question
+      .trim()
+      .toLowerCase()
+      .replace(/[!?.,]+$/g, "")
+      .replace(/\s+/g, " ");
+    const greetings = [
+      {
+        pattern: /^(hi|hello|hey|hai|hii+)$/,
+        answer: "Hello! Welcome to Hatvisor AI Support. How can I help you today?"
+      },
+      {
+        pattern: /^(thanks|thank you|thankyou|thx)$/,
+        answer: "You're welcome! Is there anything else I can help you with?"
+      },
+      {
+        pattern: /^good morning$/,
+        answer: "Good morning! How can I help you with Hatvisor today?"
+      },
+      {
+        pattern: /^good afternoon$/,
+        answer: "Good afternoon! How can I assist you today?"
+      },
+      {
+        pattern: /^good evening$/,
+        answer: "Good evening! How can I help you with Hatvisor?"
+      },
+      {
+        pattern: /^good night$/,
+        answer: "Good night! Have a wonderful night. Feel free to ask whenever you need help."
+      },
+      {
+        pattern: /^(hope you are well|hope you're well|hope you are doing well|how are you)$/,
+        answer: "Thank you for asking! I'm doing well and ready to help you with Hatvisor."
+      }
+    ];
+    const greeting = greetings.find(item => item.pattern.test(normalizedQuestion));
+    if (greeting) {
+      return res.json({ answer: greeting.answer });
     }
     if (!process.env.OPENAI_API_KEY) {
       return res.status(503).json({ message: "AI API key is not configured" });
