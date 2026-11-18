@@ -9028,38 +9028,63 @@ app.post("/api/help-support/chat", verifyToken, async (req, res) => {
         parts: [{ text: question.trim() }]
       }
     ];
-    const aiResponse = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
-      {
-        method: "POST",
-        signal: AbortSignal.timeout(45000),
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": process.env.GEMINI_API_KEY
-        },
-        body: JSON.stringify({
-          systemInstruction: {
-            parts: [{ text: systemPrompt }]
-          },
-          contents,
-          generationConfig: {
-            temperature: 0.2,
-            maxOutputTokens: 1024
-          }
-        })
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+    const requestBody = JSON.stringify({
+      systemInstruction: {
+        parts: [{ text: systemPrompt }]
+      },
+      contents,
+      generationConfig: {
+        temperature: 0.2,
+        maxOutputTokens: 1024
       }
-    );
-    const result = await aiResponse.json();
-    if (!aiResponse.ok) {
-      console.error("Hatvisor Gemini API Error:", {
-        status: aiResponse.status,
-        message: result.error?.message,
-        model
-      });
-      return res.status(502).json({
-        message: "Gemini AI service request failed"
+    });
+    let aiResponse;
+    let result;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        aiResponse = await fetch(geminiUrl, {
+          method: "POST",
+          signal: AbortSignal.timeout(12000),
+          headers: {
+            "Content-Type": "application/json",
+            "x-goog-api-key": process.env.GEMINI_API_KEY
+          },
+          body: requestBody
+        });
+        result = await aiResponse.json();
+        if (aiResponse.ok) break;
+        console.warn("Gemini request failed:", {
+          attempt,
+          status: aiResponse.status,
+          message: result.error?.message
+        });
+        if (![500, 502, 503, 504].includes(aiResponse.status)) {
+          break;
+        }
+      } catch (error) {
+        console.warn("Gemini network error:", {
+          attempt,
+          message: error.message
+        });
+        if (attempt === 3) {
+          return res.status(503).json({
+            message: "AI service is temporarily busy. Please try again."
+          });
+        }
+      }
+      if (attempt < 3) {
+        await new Promise(resolve =>
+          setTimeout(resolve, attempt * 1500)
+        );
+      }
+    }
+    if (!aiResponse?.ok) {
+      return res.status(503).json({
+        message: "AI service is temporarily busy. Please try again."
       });
     }
+    
     const answer = result.candidates?.[0]?.content?.parts
       ?.map(part => part.text || "")
       .join("")
