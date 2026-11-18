@@ -8871,26 +8871,19 @@ app.get("/getDashboardSettings/:userId", async (req, res) => {
 /* ================= HATVISOR AI HELP & SUPPORT ================= */
 
 const helpGuidePath = path.join(__dirname, "knowledge", "HatvisorUserGuid.docx");
-let cachedHelpGuide = null;
-let cachedHelpGuideMtime = 0;
+
 async function getHelpGuideSections() {
   if (!fs.existsSync(helpGuidePath)) {
     return [];
   }
-  const stats = fs.statSync(helpGuidePath);
-  if (cachedHelpGuide && cachedHelpGuideMtime === stats.mtimeMs) {
-    return cachedHelpGuide;
-  }
   const result = await mammoth.extractRawText({
     path: helpGuidePath
   });
-  cachedHelpGuide = result.value
+  const guide = result.value;
+  return guide
     .split(/\n\s*\n/)
     .map(section => section.trim())
     .filter(Boolean);
-  cachedHelpGuideMtime = stats.mtimeMs;
-  console.log("Hatvisor Guide Loaded:", cachedHelpGuide.length, "sections");
-  return cachedHelpGuide;
 }
 async function findRelevantGuideSections(question, history = []) {
   const sections = await getHelpGuideSections();
@@ -8988,15 +8981,7 @@ app.post("/api/help-support/chat", verifyToken, async (req, res) => {
       return res.json({ answer: "I couldn't find instructions for that in the Hatvisor User Guidelines. Please contact Hatvisor Support for more information." });
     }
     const safeHistory = (Array.isArray(history) ? history : [])
-    .filter(item =>
-      item &&
-      ["user", "assistant"].includes(item.role) &&
-      typeof item.content === "string" &&
-      item.content.trim() &&
-      !item.content.startsWith("AI Support Error:") &&
-      !item.content.startsWith("Sorry, I couldn't process your request") &&
-      !item.content.startsWith("Hi! I'm Hatvisor AI Support.")
-    )
+    .filter(item => item && ["user", "assistant"].includes(item.role) && typeof item.content === "string")
     .slice(-8)
     .map(item => ({
       role: item.role,
@@ -9028,63 +9013,31 @@ app.post("/api/help-support/chat", verifyToken, async (req, res) => {
         parts: [{ text: question.trim() }]
       }
     ];
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
-    const requestBody = JSON.stringify({
-      systemInstruction: {
-        parts: [{ text: systemPrompt }]
-      },
-      contents,
-      generationConfig: {
-        temperature: 0.2,
-        maxOutputTokens: 1024
-      }
-    });
-    let aiResponse;
-    let result;
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        aiResponse = await fetch(geminiUrl, {
-          method: "POST",
-          signal: AbortSignal.timeout(12000),
-          headers: {
-            "Content-Type": "application/json",
-            "x-goog-api-key": process.env.GEMINI_API_KEY
+    const aiResponse = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": process.env.GEMINI_API_KEY
+        },
+        body: JSON.stringify({
+          systemInstruction: {
+            parts: [{ text: systemPrompt }]
           },
-          body: requestBody
-        });
-        result = await aiResponse.json();
-        if (aiResponse.ok) break;
-        console.warn("Gemini request failed:", {
-          attempt,
-          status: aiResponse.status,
-          message: result.error?.message
-        });
-        if (![500, 502, 503, 504].includes(aiResponse.status)) {
-          break;
-        }
-      } catch (error) {
-        console.warn("Gemini network error:", {
-          attempt,
-          message: error.message
-        });
-        if (attempt === 3) {
-          return res.status(503).json({
-            message: "AI service is temporarily busy. Please try again."
-          });
-        }
+          contents,
+          generationConfig: {
+            temperature: 0.2,
+            maxOutputTokens: 1024
+          }
+        })
       }
-      if (attempt < 3) {
-        await new Promise(resolve =>
-          setTimeout(resolve, attempt * 1500)
-        );
-      }
+    );
+    const result = await aiResponse.json();
+    if (!aiResponse.ok) {
+      console.error("Hatvisor Gemini API Error:", aiResponse.status, result.error?.message);
+      return res.status(502).json({ message: "Gemini AI service request failed" });
     }
-    if (!aiResponse?.ok) {
-      return res.status(503).json({
-        message: "AI service is temporarily busy. Please try again."
-      });
-    }
-    
     const answer = result.candidates?.[0]?.content?.parts
       ?.map(part => part.text || "")
       .join("")
