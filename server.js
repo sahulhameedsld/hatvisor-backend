@@ -8870,7 +8870,55 @@ app.get("/getDashboardSettings/:userId", async (req, res) => {
 
 /* ================= HATVISOR AI HELP & SUPPORT ================= */
 
-const helpGuidePath = path.join(__dirname, "knowledge", "HatvisorUserGuid.docx");
+const HelpConversationSchema = new mongoose.Schema({
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    required: true,
+    index: true
+  },
+
+  status: {
+    type: String,
+    enum: ["active", "archived"],
+    default: "active"
+  },
+
+  messages: [{
+    role: {
+      type: String,
+      enum: ["user", "assistant"],
+      required: true
+    },
+    content: {
+      type: String,
+      required: true
+    },
+    createdAt: {
+      type: Date,
+      default: Date.now
+    }
+  }]
+}, {
+  timestamps: true
+});
+
+HelpConversationSchema.index({
+  userId: 1,
+  status: 1,
+  updatedAt: -1
+});
+
+const HelpConversation = mongoose.model(
+  "HelpConversation",
+  HelpConversationSchema
+);
+
+const helpGuidePath = path.join(
+  __dirname,
+  "knowledge",
+  "HatvisorUserGuid.docx"
+);
 
 async function getHelpGuideSections() {
   if (!fs.existsSync(helpGuidePath)) {
@@ -8924,12 +8972,105 @@ async function findRelevantGuideSections(question, history = []) {
   .map(item => item.section.slice(0, 3500));
 }
 
+
+/* ========== GET ACTIVE SUPPORT CONVERSATION ========== */
+
+app.get("/api/help-support/conversation", verifyToken, async (req, res) => {
+  try {
+    const conversation = await HelpConversation.findOne({
+      userId: req.authUserId,
+      status: "active"
+    })
+    .sort({ updatedAt: -1 })
+    .lean();
+
+    return res.json({
+      conversation: conversation || null
+    });
+  } catch (error) {
+    console.error("Get support conversation error:", error);
+    return res.status(500).json({
+      message: "Unable to load support conversation"
+    });
+  }
+});
+
+
+/* ========== START NEW SUPPORT CONVERSATION ========== */
+
+app.post("/api/help-support/new", verifyToken, async (req, res) => {
+  try {
+    await HelpConversation.updateMany(
+      {
+        userId: req.authUserId,
+        status: "active"
+      },
+      {
+        $set: { status: "archived" }
+      }
+    );
+
+    const conversation = await HelpConversation.create({
+      userId: req.authUserId,
+      status: "active",
+      messages: []
+    });
+
+    return res.json({
+      success: true,
+      conversation
+    });
+  } catch (error) {
+    console.error("New support conversation error:", error);
+    return res.status(500).json({
+      message: "Unable to start new conversation"
+    });
+  }
+});
+
 app.post("/api/help-support/chat", verifyToken, async (req, res) => {
   try {
-    const { question, history = [] } = req.body;
+    const { question } = req.body;
     if (typeof question !== "string" || !question.trim() || question.length > 2000) {
       return res.status(400).json({ message: "Invalid question" });
     }
+    let conversation = await HelpConversation.findOne({
+      userId: req.authUserId,
+      status: "active"
+    }).sort({ updatedAt: -1 });
+    if (!conversation) {
+      conversation = await HelpConversation.create({
+        userId: req.authUserId,
+        status: "active",
+        messages: []
+      });
+    }
+    const history = conversation.messages
+      .filter(item =>
+        ["user", "assistant"].includes(item.role) &&
+        typeof item.content === "string" &&
+        !item.content.startsWith("AI Support Error:")
+      )
+      .slice(-8)
+      .map(item => ({
+        role: item.role,
+        content: item.content
+      }));
+    const saveSupportAnswer = async (answer) => {
+      const finalAnswer = answer || "Sorry, I couldn't generate an answer.";
+      conversation.messages.push(
+        {
+          role: "user",
+          content: question.trim()
+        },
+        {
+          role: "assistant",
+          content: finalAnswer
+        }
+      );
+      await conversation.save();
+      return res.json({ answer: finalAnswer, conversationId: conversation._id });
+    };
     const normalizedQuestion = question
       .trim()
       .toLowerCase()
@@ -8967,7 +9108,7 @@ app.post("/api/help-support/chat", verifyToken, async (req, res) => {
     ];
     const greeting = greetings.find(item => item.pattern.test(normalizedQuestion));
     if (greeting) {
-      return res.json({ answer: greeting.answer });
+      return await saveSupportAnswer(greeting.answer);
     }
     if (!process.env.GEMINI_API_KEY) {
       return res.status(503).json({ message: "Gemini API key is not configured" });
@@ -8978,7 +9119,9 @@ app.post("/api/help-support/chat", verifyToken, async (req, res) => {
     }
     const sections = await findRelevantGuideSections(question, Array.isArray(history) ? history.slice(-8) : []);
     if (!sections.length) {
-      return res.json({ answer: "I couldn't find instructions for that in the Hatvisor User Guidelines. Please contact Hatvisor Support for more information." });
+      return await saveSupportAnswer(
+        "I couldn't find instructions for that in the Hatvisor User Guidelines. Please contact Hatvisor Support for more information."
+      );
     }
     const safeHistory = (Array.isArray(history) ? history : [])
     .filter(item => item && ["user", "assistant"].includes(item.role) && typeof item.content === "string")
@@ -9042,7 +9185,7 @@ app.post("/api/help-support/chat", verifyToken, async (req, res) => {
       ?.map(part => part.text || "")
       .join("")
       .trim();
-    return res.json({ answer: answer || "Sorry, I couldn't generate an answer." });
+    return await saveSupportAnswer(answer);
   } catch (error) {
     console.error("Hatvisor AI Support Error:", error);
     return res.status(500).json({ message: "AI support temporarily unavailable" });
