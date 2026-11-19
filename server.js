@@ -9160,37 +9160,90 @@ app.post("/api/help-support/chat", verifyToken, async (req, res) => {
       }
     ];
     const geminiStartTime = Date.now();
-    const aiResponse = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": process.env.GEMINI_API_KEY
-        },
-        body: JSON.stringify({
-          systemInstruction: {
-            parts: [{ text: systemPrompt }]
-          },
-          contents,
-          generationConfig: {
-            temperature: 0.2,
-            maxOutputTokens: 512
-          }
-        })
-      }
-    );
-    const result = await aiResponse.json();
-    console.log("Hatvisor Gemini Response Time:", Date.now() - geminiStartTime, "ms");
-    if (!aiResponse.ok) {
-      console.error("Hatvisor Gemini API Error:", aiResponse.status, result.error?.message);
-      return res.status(502).json({ message: "Gemini AI service request failed" });
+
+const geminiUrl =
+  `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+
+const geminiBody = JSON.stringify({
+  systemInstruction: {
+    parts: [{ text: systemPrompt }]
+  },
+  contents,
+  generationConfig: {
+    temperature: 0.2,
+    maxOutputTokens: 512
+  }
+});
+
+let result = null;
+let success = false;
+
+for (let attempt = 1; attempt <= 2; attempt++) {
+  try {
+    const aiResponse = await fetch(geminiUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": process.env.GEMINI_API_KEY
+      },
+      body: geminiBody,
+      signal: AbortSignal.timeout(15000)
+    });
+
+    result = await aiResponse.json();
+
+    if (aiResponse.ok) {
+      success = true;
+      break;
     }
-    const answer = result.candidates?.[0]?.content?.parts
-      ?.map(part => part.text || "")
-      .join("")
-      .trim();
-    return await saveSupportAnswer(answer);
+
+    console.error("Hatvisor Gemini API Error:", {
+      attempt,
+      status: aiResponse.status,
+      message: result.error?.message
+    });
+
+    // Retry only temporary server errors
+    if (![429, 500, 502, 503, 504].includes(aiResponse.status)) {
+      break;
+    }
+
+  } catch (error) {
+    console.error("Hatvisor Gemini Network Error:", {
+      attempt,
+      message: error.message
+    });
+  }
+
+  if (attempt < 2) {
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+}
+
+console.log(
+  "Hatvisor Gemini Response Time:",
+  Date.now() - geminiStartTime,
+  "ms"
+);
+
+if (!success) {
+  return res.status(503).json({
+    message: "AI Support is temporarily busy. Please try again."
+  });
+}
+
+const answer = result.candidates?.[0]?.content?.parts
+  ?.map(part => part.text || "")
+  .join("")
+  .trim();
+
+if (!answer) {
+  return res.status(503).json({
+    message: "AI could not generate a response. Please try again."
+  });
+}
+
+return await saveSupportAnswer(answer);
   } catch (error) {
     console.error("Hatvisor AI Support Error:", error);
     return res.status(500).json({ message: "AI support temporarily unavailable" });
