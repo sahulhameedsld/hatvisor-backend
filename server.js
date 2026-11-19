@@ -9082,6 +9082,18 @@ app.post("/api/help-support/chat", verifyToken, async (req, res) => {
         answer: "Hey there! 👋 Welcome to Hatvisor AI Support. How can I help you today?"
       },
       {
+        pattern: /^(what's up|whats up|sup)$/,
+        answer: "Hey! I'm here and ready to help. What would you like to know about Hatvisor?"
+      },
+      {
+        pattern: /^(how are you|how are you doing|how r u)(?:\s+(buddy|bro|friend))?$/,
+        answer: "I'm doing great, thanks for asking! 😊 How can I help you with Hatvisor?"
+      },
+      {
+        pattern: /^(ok|okay|alright|cool|great|nice)$/,
+        answer: "Great! 😊 Let me know what you'd like to explore next."
+      },
+      {
         pattern: /^(thanks|thank you|thankyou|thx)$/,
         answer: "You're welcome! Is there anything else I can help you with?"
       },
