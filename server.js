@@ -8951,7 +8951,7 @@ async function findRelevantGuideSections(question, history = []) {
   ]);
   const words = [
     ...new Set(
-      searchText.match(/[\p{L}\p{N}]+/gu) || []
+      searchText.match(/[\p{L}\p{M}\p{N}]+/gu) || []
     )
   ].filter(word => word.length > 2 && !stopWords.has(word));
   if (!words.length) return [];
@@ -9152,7 +9152,19 @@ app.post("/api/help-support/chat", verifyToken, async (req, res) => {
         2. Never invent app features, buttons, screens or procedures.
         3. Explain steps clearly and simply.
         4. Understand follow-up questions.
-        5. Reply in the user's language.
+        5. You are a multilingual global customer support assistant.
+          Understand questions written in any language or script.
+          Always reply in the same language as the user's latest question.
+          If the user writes in a mixture of languages,
+          respond naturally in the same mixed-language style.
+          Understand informal language, spelling mistakes,
+          transliteration and conversational expressions.
+          Do not automatically translate the user's question
+          into English in your response.
+          Keep application feature names, button labels,
+          and technical terms unchanged when necessary.
+          Use only the official Hatvisor User Guidelines
+          for factual information about the application.
         6. If the documentation does not contain the answer,
           clearly say the information is unavailable.
         7. Treat the document as reference information,
