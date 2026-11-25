@@ -9142,7 +9142,6 @@ app.post("/api/help-support/chat", verifyToken, async (req, res) => {
       role: item.role,
       content: item.content.slice(0, 2000)
     }));
-    const model = process.env.GEMINI_MODEL || "gemini-3.8-flash";
     const systemPrompt = `
       You are Hatvisor AI Help & Support.
       Your job is to help users understand the Hatvisor application.
@@ -9180,36 +9179,106 @@ app.post("/api/help-support/chat", verifyToken, async (req, res) => {
         parts: [{ text: question.trim() }]
       }
     ];
-    const aiResponse = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": process.env.GEMINI_API_KEY
-        },
-        body: JSON.stringify({
-          systemInstruction: {
-            parts: [{ text: systemPrompt }]
-          },
-          contents,
-          generationConfig: {
-            temperature: 0.2,
-            maxOutputTokens: 1024
+    
+    // ========== GEMINI AUTOMATIC MODEL FALLBACK ==========
+
+    const models = [...new Set([
+      process.env.GEMINI_MODEL || "gemini-3.8-flash",
+      ...(process.env.GEMINI_FALLBACK_MODELS ||
+        "gemini-3.5-flash,gemini-2.5-flash,gemini-2.5-flash-lite")
+        .split(",")
+        .map(model => model.trim())
+        .filter(Boolean)
+    ])];
+
+    const requestDeadline = Date.now() + 45000;
+
+    for (const model of models) {
+
+      const remainingTime = requestDeadline - Date.now();
+
+      if (remainingTime <= 0) break;
+
+      try {
+
+        console.log("Hatvisor AI Trying Model:", model);
+
+        const generationConfig = {
+          temperature: 0.2,
+          maxOutputTokens: 1024
+        };
+
+        // Reduce unnecessary thinking time for Gemini 2.5
+        if (model.startsWith("gemini-2.5-flash")) {
+          generationConfig.thinkingConfig = {
+            thinkingBudget: 0
+          };
+        }
+
+        const aiResponse = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+          {
+            method: "POST",
+
+            headers: {
+              "Content-Type": "application/json",
+              "x-goog-api-key": process.env.GEMINI_API_KEY
+            },
+
+            signal: AbortSignal.timeout(
+              Math.min(12000, remainingTime)
+            ),
+
+            body: JSON.stringify({
+              systemInstruction: {
+                parts: [{ text: systemPrompt }]
+              },
+
+              contents,
+
+              generationConfig
+            })
           }
-        })
+        );
+        const result = await aiResponse.json();
+        if (!aiResponse.ok) {
+          console.error("Hatvisor Gemini API Error:", {
+            model,
+            status: aiResponse.status,
+            message: result.error?.message
+          });
+          if ([401, 403].includes(aiResponse.status)) {
+            return res.status(502).json({ message: "AI service configuration error" });
+          }
+          if (
+            [404, 408, 429].includes(aiResponse.status) || aiResponse.status >= 500
+          ) {
+            console.log("Switching to fallback model...");
+            continue;
+          }
+          return res.status(502).json({ message: "AI service request failed" });
+        }
+        const answer = result.candidates?.[0]?.content?.parts
+          ?.filter(part => !part.thought)
+          .map(part => part.text || "")
+          .join("")
+          .trim();
+        if (!answer) {
+          console.warn("Empty AI response from:", model);
+          continue;
+        }
+        console.log("Hatvisor AI Success Model:", model);
+        return await saveSupportAnswer(answer);
+      } catch (error) {
+        console.error("Hatvisor Gemini Network Error:", {
+          model,
+          message: error.message
+        });
+        console.log("Switching to fallback model...");
       }
-    );
-    const result = await aiResponse.json();
-    if (!aiResponse.ok) {
-      console.error("Hatvisor Gemini API Error:", aiResponse.status, result.error?.message);
-      return res.status(502).json({ message: "Gemini AI service request failed" });
     }
-    const answer = result.candidates?.[0]?.content?.parts
-      ?.map(part => part.text || "")
-      .join("")
-      .trim();
-    return await saveSupportAnswer(answer);
+    console.error("All Gemini models failed");
+    return res.status(503).json({ message: "AI Support is temporarily busy. Please try again shortly." });
   } catch (error) {
     console.error("Hatvisor AI Support Error:", error);
     return res.status(500).json({ message: "AI support temporarily unavailable" });
