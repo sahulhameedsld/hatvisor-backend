@@ -9191,7 +9191,7 @@ app.post("/api/help-support/chat", verifyToken, async (req, res) => {
         .filter(Boolean)
     ])];
 
-    const requestDeadline = Date.now() + 45000;
+    const requestDeadline = Date.now() + 90000;
 
     for (const model of models) {
 
@@ -9226,7 +9226,7 @@ app.post("/api/help-support/chat", verifyToken, async (req, res) => {
             },
 
             signal: AbortSignal.timeout(
-              Math.min(12000, remainingTime)
+              Math.min(30000, remainingTime)
             ),
 
             body: JSON.stringify({
